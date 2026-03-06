@@ -59,6 +59,34 @@ export interface ApplicationDraft {
   note?: string;
 }
 
+export type WebsiteAdminRole = 'system_admin' | 'normal_admin';
+
+export interface WebsiteAdmin {
+  id: string;
+  username: string;
+  displayName: string;
+  role: WebsiteAdminRole;
+  password: string;
+  email?: string;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WebsiteUserState {
+  currentAdminId: string;
+  admins: WebsiteAdmin[];
+}
+
+export interface WebsiteAdminUpdateDraft {
+  username: string;
+  displayName: string;
+  password: string;
+  email?: string;
+  note?: string;
+  role: WebsiteAdminRole;
+}
+
 export interface UserSummary {
   enabled: boolean;
   message: string;

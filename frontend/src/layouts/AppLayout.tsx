@@ -20,6 +20,7 @@ import {
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useMemo, useState } from 'react';
 import { useAppStore } from '../contexts/AppStoreContext';
+import { websiteAdminRoleColorMap, websiteAdminRoleLabelMap } from '../utils/websiteAdmin';
 
 const menuEntries = [
   { key: '/', label: '概览', icon: <IconDashboard /> },
@@ -31,7 +32,7 @@ const menuEntries = [
 export const AppLayout = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { theme, setTheme, apiMode } = useAppStore();
+  const { theme, setTheme, apiMode, currentAdmin } = useAppStore();
   const [collapsed, setCollapsed] = useState(false);
 
   const selectedKey = useMemo(() => {
@@ -91,7 +92,15 @@ export const AppLayout = () => {
             </Space>
           </Space>
 
-          <Space size="medium">
+          <Space size="medium" wrap>
+            {currentAdmin ? (
+              <Space size="small" className="header-user-chip">
+                <Tag color={websiteAdminRoleColorMap[currentAdmin.role]}>
+                  {websiteAdminRoleLabelMap[currentAdmin.role]}
+                </Tag>
+                <Typography.Text>{currentAdmin.displayName}</Typography.Text>
+              </Space>
+            ) : null}
             <Space size="small">
               <IconBulb />
               <Typography.Text>{theme === 'dark' ? '深色模式' : '浅色模式'}</Typography.Text>
@@ -102,7 +111,9 @@ export const AppLayout = () => {
               uncheckedText="Light"
               onChange={(checked) => setTheme(checked ? 'dark' : 'light')}
             />
-            <Avatar style={{ backgroundColor: '#165dff' }}>KZ</Avatar>
+            <Avatar style={{ backgroundColor: '#165dff' }}>
+              {currentAdmin?.displayName.slice(0, 1) ?? 'K'}
+            </Avatar>
           </Space>
         </Layout.Header>
 
