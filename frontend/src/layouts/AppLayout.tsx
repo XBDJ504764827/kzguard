@@ -13,6 +13,7 @@ import {
   IconBulb,
   IconCheckCircle,
   IconDashboard,
+  IconDriveFile,
   IconMenuFold,
   IconMenuUnfold,
   IconUser,
@@ -27,6 +28,7 @@ const menuEntries = [
   { key: '/communities', label: '社区组管理', icon: <IconApps /> },
   { key: '/whitelist', label: '白名单管理', icon: <IconCheckCircle /> },
   { key: '/users', label: '网站用户', icon: <IconUser /> },
+  { key: '/operation-logs', label: '操作日志', icon: <IconDriveFile /> },
 ];
 
 export const AppLayout = () => {

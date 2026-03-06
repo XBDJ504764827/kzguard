@@ -87,6 +87,25 @@ export interface WebsiteAdminUpdateDraft {
   role: WebsiteAdminRole;
 }
 
+export type OperationLogAction =
+  | 'community_created'
+  | 'server_created'
+  | 'whitelist_approved'
+  | 'whitelist_rejected'
+  | 'whitelist_manual_added'
+  | 'whitelist_application_simulated'
+  | 'admin_profile_updated';
+
+export interface OperationLog {
+  id: string;
+  createdAt: string;
+  operatorId: string;
+  operatorName: string;
+  operatorRole: WebsiteAdminRole;
+  action: OperationLogAction;
+  detail: string;
+}
+
 export interface UserSummary {
   enabled: boolean;
   message: string;

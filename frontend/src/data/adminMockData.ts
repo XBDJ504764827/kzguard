@@ -1,4 +1,4 @@
-import type { WebsiteUserState } from '../types';
+import type { OperationLog, WebsiteUserState } from '../types';
 
 export const initialWebsiteUserState: WebsiteUserState = {
   currentAdminId: 'admin_root',
@@ -38,3 +38,33 @@ export const initialWebsiteUserState: WebsiteUserState = {
     },
   ],
 };
+
+export const initialOperationLogs: OperationLog[] = [
+  {
+    id: 'log_001',
+    createdAt: '2026-03-06T09:35:00.000Z',
+    operatorId: 'admin_root',
+    operatorName: '主系统管理员',
+    operatorRole: 'system_admin',
+    action: 'admin_profile_updated',
+    detail: '修改了 运营管理员 的备注信息，用于明确其负责社区与白名单日常维护。',
+  },
+  {
+    id: 'log_002',
+    createdAt: '2026-03-06T10:10:00.000Z',
+    operatorId: 'admin_ops',
+    operatorName: '运营管理员',
+    operatorRole: 'normal_admin',
+    action: 'community_created',
+    detail: '新增社区 “HighTower KZ 社区”。',
+  },
+  {
+    id: 'log_003',
+    createdAt: '2026-03-06T10:30:00.000Z',
+    operatorId: 'admin_review',
+    operatorName: '审核管理员',
+    operatorRole: 'normal_admin',
+    action: 'whitelist_approved',
+    detail: '审核通过玩家 KZRunner 的白名单申请。',
+  },
+];

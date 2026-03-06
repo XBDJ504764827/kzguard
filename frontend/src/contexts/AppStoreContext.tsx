@@ -7,7 +7,7 @@ import {
   type PropsWithChildren,
 } from 'react';
 import { apiService } from '../api';
-import { initialWebsiteUserState } from '../data/adminMockData';
+import { initialOperationLogs, initialWebsiteUserState } from '../data/adminMockData';
 import { initialState } from '../data/mockData';
 import type {
   ApiMode,
@@ -15,6 +15,8 @@ import type {
   ApplicationDraft,
   Community,
   ManualWhitelistDraft,
+  OperationLog,
+  OperationLogAction,
   Server,
   ServerDraft,
   ThemeMode,
@@ -27,6 +29,7 @@ import type {
 import { applyTheme, getPreferredTheme, persistTheme } from '../utils/theme';
 
 const WEBSITE_USER_STORAGE_KEY = 'kzguard-website-user-state-v1';
+const OPERATION_LOG_STORAGE_KEY = 'kzguard-operation-logs-v1';
 
 interface AppStoreContextValue {
   state: AppState;
@@ -37,6 +40,7 @@ interface AppStoreContextValue {
   userSummary: UserSummary | null;
   websiteUsers: WebsiteAdmin[];
   currentAdmin: WebsiteAdmin | null;
+  operationLogs: OperationLog[];
   setTheme: (theme: ThemeMode) => void;
   refreshState: () => Promise<void>;
   switchCurrentAdmin: (adminId: string) => void;
@@ -52,6 +56,8 @@ interface AppStoreContextValue {
 const AppStoreContext = createContext<AppStoreContextValue | null>(null);
 
 const clone = <T,>(value: T): T => structuredClone(value);
+const createId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
+const normalizeText = (value?: string) => value?.trim() || undefined;
 
 const getInitialWebsiteUserState = (): WebsiteUserState => {
   if (typeof window === 'undefined') {
@@ -77,6 +83,25 @@ const getInitialWebsiteUserState = (): WebsiteUserState => {
   }
 };
 
+const getInitialOperationLogs = (): OperationLog[] => {
+  if (typeof window === 'undefined') {
+    return clone(initialOperationLogs);
+  }
+
+  const storedLogs = window.localStorage.getItem(OPERATION_LOG_STORAGE_KEY);
+
+  if (!storedLogs) {
+    return clone(initialOperationLogs);
+  }
+
+  try {
+    const parsedLogs = JSON.parse(storedLogs) as OperationLog[];
+    return Array.isArray(parsedLogs) ? parsedLogs : clone(initialOperationLogs);
+  } catch {
+    return clone(initialOperationLogs);
+  }
+};
+
 const persistWebsiteUsers = (state: WebsiteUserState) => {
   if (typeof window === 'undefined') {
     return;
@@ -85,7 +110,13 @@ const persistWebsiteUsers = (state: WebsiteUserState) => {
   window.localStorage.setItem(WEBSITE_USER_STORAGE_KEY, JSON.stringify(state));
 };
 
-const normalizeText = (value?: string) => value?.trim() || undefined;
+const persistOperationLogs = (logs: OperationLog[]) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(OPERATION_LOG_STORAGE_KEY, JSON.stringify(logs));
+};
 
 export const AppStoreProvider = ({ children }: PropsWithChildren) => {
   const [state, setState] = useState<AppState>(initialState);
@@ -94,6 +125,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
   const [bootstrapping, setBootstrapping] = useState(true);
   const [userSummary, setUserSummary] = useState<UserSummary | null>(null);
   const [websiteUserState, setWebsiteUserState] = useState<WebsiteUserState>(getInitialWebsiteUserState);
+  const [operationLogs, setOperationLogs] = useState<OperationLog[]>(getInitialOperationLogs);
 
   useEffect(() => {
     applyTheme(theme);
@@ -104,6 +136,10 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     persistWebsiteUsers(websiteUserState);
   }, [websiteUserState]);
 
+  useEffect(() => {
+    persistOperationLogs(operationLogs);
+  }, [operationLogs]);
+
   const currentAdmin = useMemo(
     () =>
       websiteUserState.admins.find((admin) => admin.id === websiteUserState.currentAdminId) ??
@@ -113,17 +149,33 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
   );
 
   useEffect(() => {
-    if (!currentAdmin) {
+    if (!currentAdmin || currentAdmin.id === websiteUserState.currentAdminId) {
       return;
     }
 
-    if (currentAdmin.id !== websiteUserState.currentAdminId) {
-      setWebsiteUserState((currentState) => ({
-        ...currentState,
-        currentAdminId: currentAdmin.id,
-      }));
-    }
+    setWebsiteUserState((currentState) => ({
+      ...currentState,
+      currentAdminId: currentAdmin.id,
+    }));
   }, [currentAdmin, websiteUserState.currentAdminId]);
+
+  const appendOperationLog = (action: OperationLogAction, detail: string, operator = currentAdmin) => {
+    if (!operator) {
+      return;
+    }
+
+    const log: OperationLog = {
+      id: createId('log'),
+      createdAt: new Date().toISOString(),
+      operatorId: operator.id,
+      operatorName: operator.displayName,
+      operatorRole: operator.role,
+      action,
+      detail,
+    };
+
+    setOperationLogs((currentLogs) => [log, ...currentLogs]);
+  };
 
   const refreshState = async () => {
     const nextState = await apiService.loadState();
@@ -256,6 +308,13 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       currentAdminId: isSelfEdit ? updatedAdmin.id : currentState.currentAdminId,
     }));
 
+    appendOperationLog(
+      'admin_profile_updated',
+      isSelfEdit
+        ? `修改了自己的管理员资料，当前用户名为 ${updatedAdmin.username}。`
+        : `修改了管理员 ${targetAdmin.displayName} 的资料，当前用户名为 ${updatedAdmin.username}。`,
+    );
+
     return updatedAdmin;
   };
 
@@ -268,49 +327,64 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     }));
     setApiError(null);
 
+    appendOperationLog('community_created', `新增社区 “${community.name}”。`);
+
     return community;
   };
 
   const addServer = async (communityId: string, draft: ServerDraft) => {
     const server = await apiService.createServer(communityId, draft);
+    const community = state.communities.find((item) => item.id === communityId);
 
     setState((currentState) => ({
       ...currentState,
-      communities: currentState.communities.map((community) => {
-        if (community.id !== communityId) {
-          return community;
+      communities: currentState.communities.map((communityItem) => {
+        if (communityItem.id !== communityId) {
+          return communityItem;
         }
 
         return {
-          ...community,
-          servers: [server, ...community.servers],
+          ...communityItem,
+          servers: [server, ...communityItem.servers],
         };
       }),
     }));
     setApiError(null);
+
+    appendOperationLog(
+      'server_created',
+      `向社区 “${community?.name ?? '未知社区'}” 添加服务器 ${server.name}（${server.ip}:${server.port}），并完成 RCON 校验。`,
+    );
 
     return server;
   };
 
   const updatePlayerStatus = async (playerId: string, status: 'approved' | 'rejected', note?: string) => {
+    const player = state.whitelist.find((item) => item.id === playerId);
+
     await apiService.updateWhitelistStatus(playerId, status, note);
 
     setState((currentState) => ({
       ...currentState,
-      whitelist: currentState.whitelist.map((player) => {
-        if (player.id !== playerId) {
-          return player;
+      whitelist: currentState.whitelist.map((whitelistPlayer) => {
+        if (whitelistPlayer.id !== playerId) {
+          return whitelistPlayer;
         }
 
         return {
-          ...player,
+          ...whitelistPlayer,
           status,
-          note: note ?? player.note,
+          note: note ?? whitelistPlayer.note,
           reviewedAt: new Date().toISOString(),
         };
       }),
     }));
     setApiError(null);
+
+    appendOperationLog(
+      status === 'approved' ? 'whitelist_approved' : 'whitelist_rejected',
+      `${status === 'approved' ? '审核通过' : '审核拒绝'}玩家 ${player?.nickname ?? playerId} 的白名单申请。${note ? ` 备注：${note}` : ''}`,
+    );
   };
 
   const approvePlayer = async (playerId: string, note?: string) => {
@@ -330,6 +404,11 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     }));
     setApiError(null);
 
+    appendOperationLog(
+      'whitelist_manual_added',
+      `手动录入玩家 ${player.nickname} 到白名单，结果为 ${player.status === 'approved' ? '已通过' : '已拒绝'}。`,
+    );
+
     return player;
   };
 
@@ -341,6 +420,8 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       whitelist: [player, ...currentState.whitelist],
     }));
     setApiError(null);
+
+    appendOperationLog('whitelist_application_simulated', `模拟提交了玩家 ${player.nickname} 的白名单申请。`);
 
     return player;
   };
@@ -355,6 +436,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       userSummary,
       websiteUsers: websiteUserState.admins,
       currentAdmin,
+      operationLogs,
       setTheme,
       refreshState,
       switchCurrentAdmin,
@@ -366,7 +448,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       manualAddPlayer,
       simulateApplication,
     }),
-    [apiError, bootstrapping, currentAdmin, state, theme, userSummary, websiteUserState.admins],
+    [apiError, bootstrapping, currentAdmin, operationLogs, state, theme, userSummary, websiteUserState.admins],
   );
 
   return <AppStoreContext.Provider value={value}>{children}</AppStoreContext.Provider>;
