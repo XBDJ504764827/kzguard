@@ -31,7 +31,7 @@ const menuEntries = [
 export const AppLayout = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { theme, setTheme } = useAppStore();
+  const { theme, setTheme, apiMode } = useAppStore();
   const [collapsed, setCollapsed] = useState(false);
 
   const selectedKey = useMemo(() => {
@@ -82,11 +82,12 @@ export const AppLayout = () => {
               icon={collapsed ? <IconMenuUnfold /> : <IconMenuFold />}
               onClick={() => setCollapsed((currentValue) => !currentValue)}
             />
-            <Space size="small">
+            <Space size="small" wrap>
               <Typography.Title heading={5} style={{ marginBottom: 0 }}>
                 KZ Guard 管理台
               </Typography.Title>
               <Tag color="arcoblue">前端原型</Tag>
+              <Tag color={apiMode === 'http' ? 'green' : 'orange'}>{apiMode === 'http' ? 'HTTP API' : 'Mock API'}</Tag>
             </Space>
           </Space>
 

@@ -1,7 +1,7 @@
-export type ThemeMode = 'light' | 'dark';
-export type ApiMode = 'mock' | 'http';
+export type WhitelistStatus = 'approved' | 'pending' | 'rejected';
+export type WhitelistSource = 'application' | 'manual';
 
-export interface Server {
+export interface ServerRecord {
   id: string;
   name: string;
   ip: string;
@@ -10,17 +10,14 @@ export interface Server {
   rconVerifiedAt: string;
 }
 
-export interface Community {
+export interface CommunityRecord {
   id: string;
   name: string;
   createdAt: string;
-  servers: Server[];
+  servers: ServerRecord[];
 }
 
-export type WhitelistStatus = 'approved' | 'pending' | 'rejected';
-export type WhitelistSource = 'application' | 'manual';
-
-export interface WhitelistPlayer {
+export interface WhitelistPlayerRecord {
   id: string;
   nickname: string;
   steamId: string;
@@ -33,8 +30,8 @@ export interface WhitelistPlayer {
 }
 
 export interface AppState {
-  communities: Community[];
-  whitelist: WhitelistPlayer[];
+  communities: CommunityRecord[];
+  whitelist: WhitelistPlayerRecord[];
 }
 
 export interface ServerDraft {
@@ -57,10 +54,4 @@ export interface ApplicationDraft {
   steamId: string;
   contact?: string;
   note?: string;
-}
-
-export interface UserSummary {
-  enabled: boolean;
-  message: string;
-  plannedModules: string[];
 }

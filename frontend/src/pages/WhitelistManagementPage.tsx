@@ -16,24 +16,25 @@ import { IconPlus } from '@arco-design/web-react/icon';
 import { useMemo, useState } from 'react';
 import { useAppStore } from '../contexts/AppStoreContext';
 import type { ApplicationDraft, ManualWhitelistDraft, WhitelistPlayer, WhitelistStatus } from '../types';
+import { getErrorMessage } from '../utils/error';
 
 const TabPane = Tabs.TabPane;
 const Option = Select.Option;
 
-const emptyManualDraft: ManualWhitelistDraft = {
+const createEmptyManualDraft = (): ManualWhitelistDraft => ({
   nickname: '',
   steamId: '',
   contact: '',
   note: '',
   status: 'approved',
-};
+});
 
-const emptyApplicationDraft: ApplicationDraft = {
+const createEmptyApplicationDraft = (): ApplicationDraft => ({
   nickname: '',
   steamId: '',
   contact: '',
   note: '',
-};
+});
 
 const formatTime = (value?: string) => {
   if (!value) {
@@ -74,12 +75,14 @@ const validatePlayerDraft = (nickname: string, steamId: string) => {
 };
 
 export const WhitelistManagementPage = () => {
-  const { state, approvePlayer, rejectPlayer, manualAddPlayer, simulateApplication } = useAppStore();
+  const { state, approvePlayer, rejectPlayer, manualAddPlayer, simulateApplication, apiMode, apiError, bootstrapping } = useAppStore();
   const [activeTab, setActiveTab] = useState<WhitelistStatus>('pending');
   const [manualModalVisible, setManualModalVisible] = useState(false);
   const [applicationModalVisible, setApplicationModalVisible] = useState(false);
-  const [manualDraft, setManualDraft] = useState<ManualWhitelistDraft>(emptyManualDraft);
-  const [applicationDraft, setApplicationDraft] = useState<ApplicationDraft>(emptyApplicationDraft);
+  const [manualDraft, setManualDraft] = useState<ManualWhitelistDraft>(createEmptyManualDraft);
+  const [applicationDraft, setApplicationDraft] = useState<ApplicationDraft>(createEmptyApplicationDraft);
+  const [submittingManual, setSubmittingManual] = useState(false);
+  const [submittingApplication, setSubmittingApplication] = useState(false);
 
   const groupedPlayers = useMemo(
     () => ({
@@ -140,9 +143,13 @@ export const WhitelistManagementPage = () => {
             <Button
               type="primary"
               size="small"
-              onClick={() => {
-                approvePlayer(record.id);
-                Message.success(`已通过 ${record.nickname} 的白名单申请`);
+              onClick={async () => {
+                try {
+                  await approvePlayer(record.id);
+                  Message.success(`已通过 ${record.nickname} 的白名单申请`);
+                } catch (error) {
+                  Message.error(getErrorMessage(error, '审核通过失败'));
+                }
               }}
             >
               通过
@@ -150,9 +157,13 @@ export const WhitelistManagementPage = () => {
             <Button
               size="small"
               status="danger"
-              onClick={() => {
-                rejectPlayer(record.id, '管理员审核未通过');
-                Message.success(`已拒绝 ${record.nickname} 的白名单申请`);
+              onClick={async () => {
+                try {
+                  await rejectPlayer(record.id, '管理员审核未通过');
+                  Message.success(`已拒绝 ${record.nickname} 的白名单申请`);
+                } catch (error) {
+                  Message.error(getErrorMessage(error, '审核拒绝失败'));
+                }
               }}
             >
               拒绝
@@ -163,7 +174,7 @@ export const WhitelistManagementPage = () => {
     },
   ];
 
-  const handleManualAdd = () => {
+  const handleManualAdd = async () => {
     const errorMessage = validatePlayerDraft(manualDraft.nickname, manualDraft.steamId);
 
     if (errorMessage) {
@@ -171,14 +182,22 @@ export const WhitelistManagementPage = () => {
       return;
     }
 
-    manualAddPlayer(manualDraft);
-    setManualModalVisible(false);
-    setManualDraft(emptyManualDraft);
-    setActiveTab(manualDraft.status);
-    Message.success('玩家已由管理员手动加入白名单列表');
+    setSubmittingManual(true);
+
+    try {
+      await manualAddPlayer(manualDraft);
+      setManualModalVisible(false);
+      setManualDraft(createEmptyManualDraft());
+      setActiveTab(manualDraft.status);
+      Message.success('玩家已由管理员手动加入白名单列表');
+    } catch (error) {
+      Message.error(getErrorMessage(error, '手动添加失败'));
+    } finally {
+      setSubmittingManual(false);
+    }
   };
 
-  const handleSimulateApplication = () => {
+  const handleSimulateApplication = async () => {
     const errorMessage = validatePlayerDraft(applicationDraft.nickname, applicationDraft.steamId);
 
     if (errorMessage) {
@@ -186,11 +205,19 @@ export const WhitelistManagementPage = () => {
       return;
     }
 
-    simulateApplication(applicationDraft);
-    setApplicationModalVisible(false);
-    setApplicationDraft(emptyApplicationDraft);
-    setActiveTab('pending');
-    Message.success('已生成一条新的玩家申请，管理员可前往待审核处理');
+    setSubmittingApplication(true);
+
+    try {
+      await simulateApplication(applicationDraft);
+      setApplicationModalVisible(false);
+      setApplicationDraft(createEmptyApplicationDraft());
+      setActiveTab('pending');
+      Message.success('已生成一条新的玩家申请，管理员可前往待审核处理');
+    } catch (error) {
+      Message.error(getErrorMessage(error, '提交申请失败'));
+    } finally {
+      setSubmittingApplication(false);
+    }
   };
 
   return (
@@ -216,8 +243,10 @@ export const WhitelistManagementPage = () => {
       <Alert
         type="info"
         showIcon
-        content="当前白名单流程为前端演示版本：玩家申请、管理员审批、已通过/已拒绝分页均为本地状态，后续会接入真实鉴权。"
+        content={`当前白名单流程接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}${bootstrapping ? '，正在加载…' : ''}`}
       />
+
+      {apiError ? <Alert type="warning" showIcon content={`接口提示：${apiError}`} /> : null}
 
       <Card>
         <Tabs activeTab={activeTab} onChange={(value) => setActiveTab(value as WhitelistStatus)}>
@@ -236,10 +265,13 @@ export const WhitelistManagementPage = () => {
       <Modal
         title="管理员手动添加玩家"
         visible={manualModalVisible}
-        onOk={handleManualAdd}
+        confirmLoading={submittingManual}
+        onOk={() => {
+          void handleManualAdd();
+        }}
         onCancel={() => {
           setManualModalVisible(false);
-          setManualDraft(emptyManualDraft);
+          setManualDraft(createEmptyManualDraft());
         }}
       >
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
@@ -286,10 +318,13 @@ export const WhitelistManagementPage = () => {
       <Modal
         title="模拟玩家提交白名单申请"
         visible={applicationModalVisible}
-        onOk={handleSimulateApplication}
+        confirmLoading={submittingApplication}
+        onOk={() => {
+          void handleSimulateApplication();
+        }}
         onCancel={() => {
           setApplicationModalVisible(false);
-          setApplicationDraft(emptyApplicationDraft);
+          setApplicationDraft(createEmptyApplicationDraft());
         }}
       >
         <Space direction="vertical" size="small" style={{ width: '100%' }}>

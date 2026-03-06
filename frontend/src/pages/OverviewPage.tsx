@@ -13,7 +13,7 @@ const formatTime = (value: string) =>
   }).format(new Date(value));
 
 export const OverviewPage = () => {
-  const { state } = useAppStore();
+  const { state, apiMode, apiError, bootstrapping } = useAppStore();
 
   const summary = useMemo(() => {
     const serverCount = state.communities.reduce((count, community) => count + community.servers.length, 0);
@@ -40,15 +40,17 @@ export const OverviewPage = () => {
           管理台概览
         </Typography.Title>
         <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          当前版本聚焦社区组管理与白名单审核流程，后端和插件将在后续迭代中接入。
+          当前版本聚焦社区组管理、白名单流程和接口层拆分，后端与前端可按环境切换为联调模式。
         </Typography.Paragraph>
       </div>
 
       <Alert
         type="info"
         showIcon
-        content="当前为前端原型版本：社区数据、RCON 验证、白名单审核均使用本地状态与模拟流程。"
+        content={`当前接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}${bootstrapping ? '，正在加载数据…' : ''}`}
       />
+
+      {apiError ? <Alert type="warning" showIcon content={`接口提示：${apiError}`} /> : null}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} lg={6}>
@@ -89,7 +91,7 @@ export const OverviewPage = () => {
               render={(community) => (
                 <List.Item key={community.id}>
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                    <Space align="center" size="small">
+                    <Space align="center" size="small" wrap>
                       <Typography.Text style={{ fontWeight: 600 }}>{community.name}</Typography.Text>
                       <Tag color="arcoblue">{community.servers.length} 台服务器</Tag>
                       <Typography.Text type="secondary">创建于 {formatTime(community.createdAt)}</Typography.Text>

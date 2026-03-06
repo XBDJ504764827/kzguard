@@ -17,6 +17,7 @@ import { IconPlus } from '@arco-design/web-react/icon';
 import { useMemo, useState } from 'react';
 import { useAppStore } from '../contexts/AppStoreContext';
 import type { Community, ServerDraft } from '../types';
+import { getErrorMessage } from '../utils/error';
 
 const { Row, Col } = Grid;
 
@@ -29,12 +30,12 @@ const formatTime = (value: string) =>
     minute: '2-digit',
   }).format(new Date(value));
 
-const emptyServerDraft: ServerDraft = {
+const createEmptyServerDraft = (): ServerDraft => ({
   name: '',
   ip: '',
   port: 27015,
   rconPassword: '',
-};
+});
 
 const validateServerDraft = (draft: ServerDraft) => {
   const ipv4Pattern = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
@@ -58,19 +59,15 @@ const validateServerDraft = (draft: ServerDraft) => {
   return null;
 };
 
-const mockRconVerify = async (draft: ServerDraft) => {
-  await new Promise((resolve) => window.setTimeout(resolve, 700));
-  return draft.rconPassword.trim().length >= 6 && draft.port > 0;
-};
-
 export const CommunityManagementPage = () => {
-  const { state, addCommunity, addServer } = useAppStore();
+  const { state, addCommunity, addServer, apiMode, apiError, bootstrapping } = useAppStore();
   const [communityModalVisible, setCommunityModalVisible] = useState(false);
   const [serverDrawerVisible, setServerDrawerVisible] = useState(false);
   const [communityName, setCommunityName] = useState('');
-  const [serverDraft, setServerDraft] = useState<ServerDraft>(emptyServerDraft);
+  const [serverDraft, setServerDraft] = useState<ServerDraft>(createEmptyServerDraft);
   const [selectedCommunity, setSelectedCommunity] = useState<Community | null>(null);
   const [submittingServer, setSubmittingServer] = useState(false);
+  const [submittingCommunity, setSubmittingCommunity] = useState(false);
 
   const totalServerCount = useMemo(
     () => state.communities.reduce((count, community) => count + community.servers.length, 0),
@@ -79,11 +76,11 @@ export const CommunityManagementPage = () => {
 
   const openServerDrawer = (community: Community) => {
     setSelectedCommunity(community);
-    setServerDraft(emptyServerDraft);
+    setServerDraft(createEmptyServerDraft());
     setServerDrawerVisible(true);
   };
 
-  const handleCreateCommunity = () => {
+  const handleCreateCommunity = async () => {
     const trimmedName = communityName.trim();
 
     if (!trimmedName) {
@@ -91,10 +88,18 @@ export const CommunityManagementPage = () => {
       return;
     }
 
-    addCommunity(trimmedName);
-    setCommunityName('');
-    setCommunityModalVisible(false);
-    Message.success('社区添加成功');
+    setSubmittingCommunity(true);
+
+    try {
+      await addCommunity(trimmedName);
+      setCommunityName('');
+      setCommunityModalVisible(false);
+      Message.success('社区添加成功');
+    } catch (error) {
+      Message.error(getErrorMessage(error, '社区添加失败'));
+    } finally {
+      setSubmittingCommunity(false);
+    }
   };
 
   const handleCreateServer = async () => {
@@ -112,17 +117,12 @@ export const CommunityManagementPage = () => {
     setSubmittingServer(true);
 
     try {
-      const verified = await mockRconVerify(serverDraft);
-
-      if (!verified) {
-        Message.error('RCON 校验失败，请检查 IP、端口或密码');
-        return;
-      }
-
-      addServer(selectedCommunity.id, serverDraft);
+      await addServer(selectedCommunity.id, serverDraft);
       setServerDrawerVisible(false);
-      setServerDraft(emptyServerDraft);
+      setServerDraft(createEmptyServerDraft());
       Message.success('RCON 验证通过，服务器已添加');
+    } catch (error) {
+      Message.error(getErrorMessage(error, '服务器添加失败'));
     } finally {
       setSubmittingServer(false);
     }
@@ -140,7 +140,7 @@ export const CommunityManagementPage = () => {
           </Typography.Paragraph>
         </div>
 
-        <Button type="primary" icon={<IconPlus />} onClick={() => setCommunityModalVisible(true)}>
+        <Button type="primary" icon={<IconPlus />} loading={submittingCommunity} onClick={() => setCommunityModalVisible(true)}>
           添加社区
         </Button>
       </div>
@@ -148,8 +148,10 @@ export const CommunityManagementPage = () => {
       <Alert
         type="info"
         showIcon
-        content={`当前共有 ${state.communities.length} 个社区，已接入 ${totalServerCount} 台服务器。RCON 为前端模拟校验，后续将接后端真实验证。`}
+        content={`当前共有 ${state.communities.length} 个社区，已接入 ${totalServerCount} 台服务器。当前接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}${bootstrapping ? '，正在加载…' : ''}`}
       />
+
+      {apiError ? <Alert type="warning" showIcon content={`接口提示：${apiError}`} /> : null}
 
       <Row gutter={[16, 16]}>
         {state.communities.map((community) => (
@@ -201,7 +203,10 @@ export const CommunityManagementPage = () => {
       <Modal
         title="添加社区"
         visible={communityModalVisible}
-        onOk={handleCreateCommunity}
+        confirmLoading={submittingCommunity}
+        onOk={() => {
+          void handleCreateCommunity();
+        }}
         onCancel={() => {
           setCommunityModalVisible(false);
           setCommunityName('');
@@ -223,14 +228,16 @@ export const CommunityManagementPage = () => {
         width={420}
         visible={serverDrawerVisible}
         confirmLoading={submittingServer}
-        onOk={handleCreateServer}
+        onOk={() => {
+          void handleCreateServer();
+        }}
         onCancel={() => {
           setServerDrawerVisible(false);
-          setServerDraft(emptyServerDraft);
+          setServerDraft(createEmptyServerDraft());
         }}
       >
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
-          <Alert type="info" showIcon content="前端阶段会先做字段校验，并模拟 RCON 连接成功后再保存服务器。" />
+          <Alert type="info" showIcon content="前端会先做字段校验，再调用接口完成模拟 RCON 验证和服务器保存。" />
 
           <Space direction="vertical" size="small" style={{ width: '100%' }}>
             <Typography.Text>服务器名称</Typography.Text>

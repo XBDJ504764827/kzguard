@@ -7,7 +7,9 @@ import {
   type PropsWithChildren,
 } from 'react';
 import { initialState } from '../data/mockData';
+import { apiService } from '../api';
 import type {
+  ApiMode,
   AppState,
   ApplicationDraft,
   Community,
@@ -15,89 +17,104 @@ import type {
   Server,
   ServerDraft,
   ThemeMode,
+  UserSummary,
   WhitelistPlayer,
 } from '../types';
 import { applyTheme, getPreferredTheme, persistTheme } from '../utils/theme';
 
-const APP_STORAGE_KEY = 'kzguard-admin-state-v1';
-
 interface AppStoreContextValue {
   state: AppState;
   theme: ThemeMode;
+  apiMode: ApiMode;
+  apiError: string | null;
+  bootstrapping: boolean;
+  userSummary: UserSummary | null;
   setTheme: (theme: ThemeMode) => void;
-  addCommunity: (name: string) => Community;
-  addServer: (communityId: string, draft: ServerDraft) => Server;
-  approvePlayer: (playerId: string, note?: string) => void;
-  rejectPlayer: (playerId: string, note?: string) => void;
-  manualAddPlayer: (draft: ManualWhitelistDraft) => WhitelistPlayer;
-  simulateApplication: (draft: ApplicationDraft) => WhitelistPlayer;
+  refreshState: () => Promise<void>;
+  addCommunity: (name: string) => Promise<Community>;
+  addServer: (communityId: string, draft: ServerDraft) => Promise<Server>;
+  approvePlayer: (playerId: string, note?: string) => Promise<void>;
+  rejectPlayer: (playerId: string, note?: string) => Promise<void>;
+  manualAddPlayer: (draft: ManualWhitelistDraft) => Promise<WhitelistPlayer>;
+  simulateApplication: (draft: ApplicationDraft) => Promise<WhitelistPlayer>;
 }
 
 const AppStoreContext = createContext<AppStoreContextValue | null>(null);
 
-const createId = (prefix: string) => `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
-
-const getInitialState = (): AppState => {
-  if (typeof window === 'undefined') {
-    return initialState;
-  }
-
-  const storedState = window.localStorage.getItem(APP_STORAGE_KEY);
-
-  if (!storedState) {
-    return initialState;
-  }
-
-  try {
-    const parsedState = JSON.parse(storedState) as AppState;
-    return parsedState;
-  } catch {
-    return initialState;
-  }
-};
-
 export const AppStoreProvider = ({ children }: PropsWithChildren) => {
-  const [state, setState] = useState<AppState>(getInitialState);
+  const [state, setState] = useState<AppState>(initialState);
   const [theme, setThemeState] = useState<ThemeMode>(getPreferredTheme);
-
-  useEffect(() => {
-    window.localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(state));
-  }, [state]);
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [bootstrapping, setBootstrapping] = useState(true);
+  const [userSummary, setUserSummary] = useState<UserSummary | null>(null);
 
   useEffect(() => {
     applyTheme(theme);
     persistTheme(theme);
   }, [theme]);
 
+  const refreshState = async () => {
+    const nextState = await apiService.loadState();
+    setState(nextState);
+  };
+
+  useEffect(() => {
+    let mounted = true;
+
+    const bootstrap = async () => {
+      setBootstrapping(true);
+
+      try {
+        const [nextState, nextUserSummary] = await Promise.all([
+          apiService.loadState(),
+          apiService.getUsersSummary().catch(() => null),
+        ]);
+
+        if (!mounted) {
+          return;
+        }
+
+        setState(nextState);
+        setUserSummary(nextUserSummary);
+        setApiError(null);
+      } catch (error) {
+        if (!mounted) {
+          return;
+        }
+
+        setApiError(error instanceof Error ? error.message : '接口初始化失败');
+      } finally {
+        if (mounted) {
+          setBootstrapping(false);
+        }
+      }
+    };
+
+    void bootstrap();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const setTheme = (nextTheme: ThemeMode) => {
     setThemeState(nextTheme);
   };
 
-  const addCommunity = (name: string) => {
-    const community: Community = {
-      id: createId('community'),
-      name,
-      createdAt: new Date().toISOString(),
-      servers: [],
-    };
+  const addCommunity = async (name: string) => {
+    const community = await apiService.createCommunity(name);
 
     setState((currentState) => ({
       ...currentState,
       communities: [community, ...currentState.communities],
     }));
+    setApiError(null);
 
     return community;
   };
 
-  const addServer = (communityId: string, draft: ServerDraft) => {
-    const server: Server = {
-      id: createId('server'),
-      name: draft.name,
-      ip: draft.ip,
-      port: draft.port,
-      rconPassword: draft.rconPassword,
-      rconVerifiedAt: new Date().toISOString(),
-    };
+  const addServer = async (communityId: string, draft: ServerDraft) => {
+    const server = await apiService.createServer(communityId, draft);
 
     setState((currentState) => ({
       ...currentState,
@@ -112,11 +129,14 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
         };
       }),
     }));
+    setApiError(null);
 
     return server;
   };
 
-  const updatePlayerStatus = (playerId: string, status: 'approved' | 'rejected', note?: string) => {
+  const updatePlayerStatus = async (playerId: string, status: 'approved' | 'rejected', note?: string) => {
+    await apiService.updateWhitelistStatus(playerId, status, note);
+
     setState((currentState) => ({
       ...currentState,
       whitelist: currentState.whitelist.map((player) => {
@@ -132,53 +152,37 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
         };
       }),
     }));
+    setApiError(null);
   };
 
-  const approvePlayer = (playerId: string, note?: string) => {
-    updatePlayerStatus(playerId, 'approved', note);
+  const approvePlayer = async (playerId: string, note?: string) => {
+    await updatePlayerStatus(playerId, 'approved', note);
   };
 
-  const rejectPlayer = (playerId: string, note?: string) => {
-    updatePlayerStatus(playerId, 'rejected', note);
+  const rejectPlayer = async (playerId: string, note?: string) => {
+    await updatePlayerStatus(playerId, 'rejected', note);
   };
 
-  const manualAddPlayer = (draft: ManualWhitelistDraft) => {
-    const player: WhitelistPlayer = {
-      id: createId('player'),
-      nickname: draft.nickname,
-      steamId: draft.steamId,
-      contact: draft.contact,
-      note: draft.note,
-      status: draft.status,
-      source: 'manual',
-      appliedAt: new Date().toISOString(),
-      reviewedAt: new Date().toISOString(),
-    };
+  const manualAddPlayer = async (draft: ManualWhitelistDraft) => {
+    const player = await apiService.createManualWhitelistEntry(draft);
 
     setState((currentState) => ({
       ...currentState,
       whitelist: [player, ...currentState.whitelist],
     }));
+    setApiError(null);
 
     return player;
   };
 
-  const simulateApplication = (draft: ApplicationDraft) => {
-    const player: WhitelistPlayer = {
-      id: createId('player'),
-      nickname: draft.nickname,
-      steamId: draft.steamId,
-      contact: draft.contact,
-      note: draft.note,
-      status: 'pending',
-      source: 'application',
-      appliedAt: new Date().toISOString(),
-    };
+  const simulateApplication = async (draft: ApplicationDraft) => {
+    const player = await apiService.createApplication(draft);
 
     setState((currentState) => ({
       ...currentState,
       whitelist: [player, ...currentState.whitelist],
     }));
+    setApiError(null);
 
     return player;
   };
@@ -187,7 +191,12 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     () => ({
       state,
       theme,
+      apiMode: apiService.mode,
+      apiError,
+      bootstrapping,
+      userSummary,
       setTheme,
+      refreshState,
       addCommunity,
       addServer,
       approvePlayer,
@@ -195,7 +204,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       manualAddPlayer,
       simulateApplication,
     }),
-    [state, theme],
+    [apiError, bootstrapping, state, theme, userSummary],
   );
 
   return <AppStoreContext.Provider value={value}>{children}</AppStoreContext.Provider>;
