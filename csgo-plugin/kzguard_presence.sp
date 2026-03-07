@@ -11,10 +11,11 @@ public Plugin myinfo =
 	name = "KZ Guard Presence",
 	author = "wqq",
 	description = "Reports live CS:GO players to KZ Guard with shared config/cache and plugin_token auth",
-	version = "0.4.0",
+	version = "0.4.1",
 	url = ""
 };
 
+char g_ApiBaseUrl[256];
 char g_ApiUrl[256];
 char g_AccessCheckUrl[256];
 char g_AccessSyncUrl[256];
@@ -517,6 +518,7 @@ public void OnAccessCheckCompleted(Handle request, bool failure, bool requestSuc
 
 void ResetRuntimeConfiguration()
 {
+	g_ApiBaseUrl[0] = '\0';
 	g_ApiUrl[0] = '\0';
 	g_AccessCheckUrl[0] = '\0';
 	g_AccessSyncUrl[0] = '\0';
@@ -582,9 +584,7 @@ void EnsureConfigTemplateExists()
 	WriteFileLine(file, "{");
 	WriteFileLine(file, "	\"global\"");
 	WriteFileLine(file, "	{");
-	WriteFileLine(file, "		\"api_url\"\t\"http://192.168.0.132:3000/api/internal/server-presence/report\"");
-	WriteFileLine(file, "		\"access_check_url\"\t\"http://192.168.0.132:3000/api/internal/server-access/check\"");
-	WriteFileLine(file, "		\"access_sync_url\"\t\"http://192.168.0.132:3000/api/internal/server-access/sync\"");
+	WriteFileLine(file, "		\"api_base_url\"	\"http://192.168.0.132:3000\"");
 	WriteFileLine(file, "		\"report_interval\"\t\"15\"");
 	WriteFileLine(file, "		\"access_sync_interval\"\t\"60\"");
 	WriteFileLine(file, "		\"access_cache_file\"\t\"data/kzguard_access_cache.kv\"");
@@ -627,6 +627,7 @@ bool LoadRuntimeConfiguration()
 
 	if (kv.JumpToKey("global", false))
 	{
+		kv.GetString("api_base_url", g_ApiBaseUrl, sizeof(g_ApiBaseUrl), "");
 		kv.GetString("api_url", g_ApiUrl, sizeof(g_ApiUrl), "");
 		kv.GetString("access_check_url", g_AccessCheckUrl, sizeof(g_AccessCheckUrl), "");
 		kv.GetString("access_sync_url", g_AccessSyncUrl, sizeof(g_AccessSyncUrl), "");
@@ -671,6 +672,7 @@ bool LoadRuntimeConfiguration()
 
 	delete kv;
 
+	TrimString(g_ApiBaseUrl);
 	TrimString(g_ApiUrl);
 	TrimString(g_AccessCheckUrl);
 	TrimString(g_AccessSyncUrl);
@@ -729,15 +731,144 @@ bool HasUnbanSyncConfiguration()
 
 void PopulateDerivedInternalUrls()
 {
+	NormalizeApiBaseUrl();
+
+	if (g_ApiBaseUrl[0] != '\0')
+	{
+		if (g_ApiUrl[0] == '\0')
+		{
+			BuildInternalUrlFromBase(g_ApiBaseUrl, "/api/internal/server-presence/report", g_ApiUrl, sizeof(g_ApiUrl));
+		}
+
+		if (g_AccessCheckUrl[0] == '\0')
+		{
+			BuildInternalUrlFromBase(g_ApiBaseUrl, "/api/internal/server-access/check", g_AccessCheckUrl, sizeof(g_AccessCheckUrl));
+		}
+
+		if (g_AccessSyncUrl[0] == '\0')
+		{
+			BuildInternalUrlFromBase(g_ApiBaseUrl, "/api/internal/server-access/sync", g_AccessSyncUrl, sizeof(g_AccessSyncUrl));
+		}
+
+		if (g_BanSyncUrl[0] == '\0')
+		{
+			BuildInternalUrlFromBase(g_ApiBaseUrl, "/api/internal/server-bans", g_BanSyncUrl, sizeof(g_BanSyncUrl));
+		}
+
+		if (g_UnbanSyncUrl[0] == '\0')
+		{
+			BuildInternalUrlFromBase(g_ApiBaseUrl, "/api/internal/server-bans/revoke", g_UnbanSyncUrl, sizeof(g_UnbanSyncUrl));
+		}
+		return;
+	}
+
+	char referenceUrl[256];
+	GetReferenceInternalUrl(referenceUrl, sizeof(referenceUrl));
+	if (referenceUrl[0] == '\0')
+	{
+		return;
+	}
+
+	if (g_ApiUrl[0] == '\0')
+	{
+		DeriveSiblingInternalUrl(referenceUrl, "/api/internal/server-presence/report", g_ApiUrl, sizeof(g_ApiUrl));
+	}
+
+	if (g_AccessCheckUrl[0] == '\0')
+	{
+		DeriveSiblingInternalUrl(referenceUrl, "/api/internal/server-access/check", g_AccessCheckUrl, sizeof(g_AccessCheckUrl));
+	}
+
+	if (g_AccessSyncUrl[0] == '\0')
+	{
+		DeriveSiblingInternalUrl(referenceUrl, "/api/internal/server-access/sync", g_AccessSyncUrl, sizeof(g_AccessSyncUrl));
+	}
+
 	if (g_BanSyncUrl[0] == '\0')
 	{
-		DeriveSiblingInternalUrl(g_ApiUrl, "/api/internal/server-bans", g_BanSyncUrl, sizeof(g_BanSyncUrl));
+		DeriveSiblingInternalUrl(referenceUrl, "/api/internal/server-bans", g_BanSyncUrl, sizeof(g_BanSyncUrl));
 	}
 
 	if (g_UnbanSyncUrl[0] == '\0')
 	{
-		DeriveSiblingInternalUrl(g_ApiUrl, "/api/internal/server-bans/revoke", g_UnbanSyncUrl, sizeof(g_UnbanSyncUrl));
+		DeriveSiblingInternalUrl(referenceUrl, "/api/internal/server-bans/revoke", g_UnbanSyncUrl, sizeof(g_UnbanSyncUrl));
 	}
+}
+
+void NormalizeApiBaseUrl()
+{
+	TrimString(g_ApiBaseUrl);
+	if (g_ApiBaseUrl[0] == '\0')
+	{
+		return;
+	}
+
+	int marker = StrContains(g_ApiBaseUrl, "/api/internal/");
+	if (marker != -1)
+	{
+		g_ApiBaseUrl[marker] = '\0';
+	}
+
+	TrimTrailingSlashes(g_ApiBaseUrl);
+}
+
+void GetReferenceInternalUrl(char[] output, int maxlen)
+{
+	output[0] = '\0';
+
+	if (g_ApiUrl[0] != '\0')
+	{
+		strcopy(output, maxlen, g_ApiUrl);
+		return;
+	}
+
+	if (g_AccessCheckUrl[0] != '\0')
+	{
+		strcopy(output, maxlen, g_AccessCheckUrl);
+		return;
+	}
+
+	if (g_AccessSyncUrl[0] != '\0')
+	{
+		strcopy(output, maxlen, g_AccessSyncUrl);
+		return;
+	}
+
+	if (g_BanSyncUrl[0] != '\0')
+	{
+		strcopy(output, maxlen, g_BanSyncUrl);
+		return;
+	}
+
+	if (g_UnbanSyncUrl[0] != '\0')
+	{
+		strcopy(output, maxlen, g_UnbanSyncUrl);
+	}
+}
+
+void BuildInternalUrlFromBase(const char[] baseUrl, const char[] nextPath, char[] output, int maxlen)
+{
+	output[0] = '\0';
+	if (baseUrl[0] == '\0')
+	{
+		return;
+	}
+
+	char normalizedBase[256];
+	strcopy(normalizedBase, sizeof(normalizedBase), baseUrl);
+	int marker = StrContains(normalizedBase, "/api/internal/");
+	if (marker != -1)
+	{
+		normalizedBase[marker] = '\0';
+	}
+	TrimTrailingSlashes(normalizedBase);
+
+	if (normalizedBase[0] == '\0')
+	{
+		return;
+	}
+
+	Format(output, maxlen, "%s%s", normalizedBase, nextPath);
 }
 
 void DeriveSiblingInternalUrl(const char[] sourceUrl, const char[] nextPath, char[] output, int maxlen)
@@ -757,6 +888,16 @@ void DeriveSiblingInternalUrl(const char[] sourceUrl, const char[] nextPath, cha
 	strcopy(output, maxlen, sourceUrl);
 	output[marker] = '\0';
 	StrCat(output, maxlen, nextPath);
+}
+
+void TrimTrailingSlashes(char[] value)
+{
+	int length = strlen(value);
+	while (length > 0 && value[length - 1] == '/')
+	{
+		value[length - 1] = '\0';
+		length--;
+	}
 }
 
 void BuildAccessSyncTempFilePath(char[] path, int maxlen)
