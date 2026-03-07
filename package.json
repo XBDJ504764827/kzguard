@@ -5,8 +5,12 @@
   "scripts": {
     "dev": "pnpm --filter frontend dev",
     "dev:frontend": "pnpm --filter frontend dev",
-    "dev:backend": "pnpm --filter backend dev",
-    "build": "pnpm --filter frontend build && pnpm --filter backend build",
+    "dev:backend": "cargo run --manifest-path backend/Cargo.toml",
+    "build:frontend": "pnpm --filter frontend build",
+    "build:backend": "cargo build --manifest-path backend/Cargo.toml",
+    "check:backend": "cargo check --manifest-path backend/Cargo.toml",
+    "start:backend": "cargo run --manifest-path backend/Cargo.toml --release",
+    "build": "pnpm --filter frontend build && cargo build --manifest-path backend/Cargo.toml",
     "preview": "pnpm --filter frontend preview"
   }
 }

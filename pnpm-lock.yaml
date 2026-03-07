@@ -8,8 +8,6 @@ importers:
 
   .: {}
 
-  backend: {}
-
   frontend:
     dependencies:
       '@arco-design/web-react':

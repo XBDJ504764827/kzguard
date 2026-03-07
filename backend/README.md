@@ -1,6 +1,6 @@
 # Backend
 
-后端现已切换为 `Rust + Axum + SQLx + MySQL`。
+后端现已切换为 `Rust + Axum + SQLx + MySQL`，不再使用 Node.js / TypeScript 运行时。
 
 ## 已提供接口
 
@@ -27,10 +27,22 @@
 
 ## 运行方式
 
+在 `backend` 目录中执行：
+
 ```bash
-pnpm --filter backend dev
-pnpm --filter backend build
-pnpm --filter backend start
+cargo run
+cargo build
+cargo run --release
+cargo check
+```
+
+如果在仓库根目录执行：
+
+```bash
+cargo run --manifest-path backend/Cargo.toml
+cargo build --manifest-path backend/Cargo.toml
+cargo run --manifest-path backend/Cargo.toml --release
+cargo check --manifest-path backend/Cargo.toml
 ```
 
 ## 开发环境数据库
