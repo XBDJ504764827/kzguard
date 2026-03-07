@@ -99,6 +99,17 @@ pub(crate) struct ReviewWhitelistBody {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct WebsiteAdminCreateDraft {
+    pub(crate) username: String,
+    pub(crate) display_name: String,
+    pub(crate) password: String,
+    pub(crate) email: Option<String>,
+    pub(crate) note: Option<String>,
+    pub(crate) role: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct WebsiteAdminUpdateDraft {
     pub(crate) username: String,
     pub(crate) display_name: String,

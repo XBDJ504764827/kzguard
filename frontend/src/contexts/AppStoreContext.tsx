@@ -27,6 +27,7 @@ import type {
   ThemeMode,
   UserSummary,
   WebsiteAdmin,
+  WebsiteAdminCreateDraft,
   WebsiteAdminUpdateDraft,
   WhitelistPlayer,
 } from '../types';
@@ -54,6 +55,7 @@ interface AppStoreContextValue {
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshState: () => Promise<void>;
+  createWebsiteAdmin: (draft: WebsiteAdminCreateDraft) => Promise<WebsiteAdmin>;
   updateWebsiteAdmin: (adminId: string, draft: WebsiteAdminUpdateDraft) => Promise<WebsiteAdmin>;
   addCommunity: (name: string) => Promise<Community>;
   addServer: (communityId: string, draft: ServerDraft) => Promise<Server>;
@@ -241,6 +243,27 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     setAuthToken('');
     clearProtectedState();
     setApiError(null);
+  };
+
+  const createWebsiteAdmin = async (draft: WebsiteAdminCreateDraft) => {
+    const createdAdmin = await apiService.createWebsiteAdmin({
+      ...draft,
+      username: draft.username.trim(),
+      displayName: draft.displayName.trim(),
+      password: draft.password,
+      email: normalizeText(draft.email),
+      note: normalizeText(draft.note),
+    });
+
+    setWebsiteUsers((currentAdmins) => [...currentAdmins, createdAdmin]);
+    setApiError(null);
+
+    appendOperationLog(
+      'admin_created',
+      `新增了管理员 ${createdAdmin.displayName}，用户名为 ${createdAdmin.username}，角色为 ${createdAdmin.role === 'system_admin' ? '系统管理员' : '普通管理员'}。`,
+    );
+
+    return createdAdmin;
   };
 
   const updateWebsiteAdmin = async (adminId: string, draft: WebsiteAdminUpdateDraft) => {
@@ -619,6 +642,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       login,
       logout,
       refreshState,
+      createWebsiteAdmin,
       updateWebsiteAdmin,
       addCommunity,
       addServer,

@@ -5,11 +5,14 @@ use crate::{
         models::{OperatorSnapshot, WebsiteAdmin},
     },
     error::{AppError, AppResult},
-    http::requests::WebsiteAdminUpdateDraft,
+    http::requests::{WebsiteAdminCreateDraft, WebsiteAdminUpdateDraft},
     support::{
         convert::trim_to_none,
+        ids::prefixed_id,
         time::{iso_to_mysql, now_iso},
-        validation::validate_website_admin_update_draft,
+        validation::{
+            validate_website_admin_create_draft, validate_website_admin_update_draft,
+        },
     },
 };
 use axum::http::StatusCode;
@@ -48,6 +51,84 @@ pub(crate) async fn get_operator_snapshot(
         name: operator.display_name.clone(),
         role: operator.role.clone(),
     })
+}
+
+pub(crate) async fn create_website_admin(
+    pool: &MySqlPool,
+    draft: WebsiteAdminCreateDraft,
+    operator_id: Option<String>,
+) -> AppResult<WebsiteAdmin> {
+    validate_website_admin_create_draft(&draft)?;
+
+    let current_admin = get_operator_snapshot(pool, operator_id.as_deref(), false).await?;
+    if current_admin.role != "system_admin" {
+        return Err(AppError::http(
+            StatusCode::FORBIDDEN,
+            "仅系统管理员可以新增管理员账号",
+        ));
+    }
+
+    let admins = list_website_admins(pool).await?;
+    if admins
+        .iter()
+        .any(|admin| admin.username.eq_ignore_ascii_case(draft.username.trim()))
+    {
+        return Err(AppError::http(
+            StatusCode::BAD_REQUEST,
+            "用户名已存在，请更换其他用户名",
+        ));
+    }
+
+    let now = now_iso();
+    let created_admin = WebsiteAdmin {
+        id: prefixed_id("admin"),
+        username: draft.username.trim().to_string(),
+        display_name: draft.display_name.trim().to_string(),
+        role: draft.role,
+        password: draft.password.trim().to_string(),
+        email: trim_to_none(draft.email),
+        note: trim_to_none(draft.note),
+        created_at: now.clone(),
+        updated_at: now.clone(),
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO website_admins (
+          id, username, display_name, role, password, email, note, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(&created_admin.id)
+    .bind(&created_admin.username)
+    .bind(&created_admin.display_name)
+    .bind(&created_admin.role)
+    .bind(&created_admin.password)
+    .bind(&created_admin.email)
+    .bind(&created_admin.note)
+    .bind(iso_to_mysql(&created_admin.created_at))
+    .bind(iso_to_mysql(&created_admin.updated_at))
+    .execute(pool)
+    .await?;
+
+    append_operation_log(
+        pool,
+        "admin_created",
+        format!(
+            "新增了管理员 {}，用户名为 {}，角色为 {}。",
+            created_admin.display_name,
+            created_admin.username,
+            if created_admin.role == "system_admin" {
+                "系统管理员"
+            } else {
+                "普通管理员"
+            }
+        ),
+        &current_admin,
+    )
+    .await?;
+
+    Ok(created_admin)
 }
 
 pub(crate) async fn update_website_admin(

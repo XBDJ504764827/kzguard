@@ -1,7 +1,8 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
 };
 
 use crate::{
@@ -10,7 +11,7 @@ use crate::{
     error::AppResult,
     http::{
         common::ApiEnvelope,
-        requests::{AdminPath, WebsiteAdminUpdateDraft},
+        requests::{AdminPath, WebsiteAdminCreateDraft, WebsiteAdminUpdateDraft},
     },
     state::SharedState,
     support::web::bearer_token_from_headers,
@@ -27,6 +28,22 @@ pub(crate) async fn list_admins_handler(
     Ok(Json(ApiEnvelope::new(admins)))
 }
 
+pub(crate) async fn create_admin_handler(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(draft): Json<WebsiteAdminCreateDraft>,
+) -> AppResult<impl IntoResponse> {
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
+    let admin = admins::create_website_admin(&state.pool, draft, Some(current_admin.id)).await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ApiEnvelope::with_message(admin, "管理员创建成功")),
+    ))
+}
+
 pub(crate) async fn update_admin_handler(
     State(state): State<SharedState>,
     Path(path): Path<AdminPath>,
@@ -36,7 +53,9 @@ pub(crate) async fn update_admin_handler(
     let token = bearer_token_from_headers(&headers);
     let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
 
-    let admin = admins::update_website_admin(&state.pool, &path.admin_id, draft, Some(current_admin.id)).await?;
+    let admin =
+        admins::update_website_admin(&state.pool, &path.admin_id, draft, Some(current_admin.id))
+            .await?;
 
     Ok(Json(ApiEnvelope::with_message(admin, "管理员信息已更新")))
 }

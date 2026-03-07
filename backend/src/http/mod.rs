@@ -68,7 +68,7 @@ pub(crate) fn build_router(state: SharedState) -> Router {
             patch(update_ban_handler).delete(delete_ban_handler),
         )
         .route("/api/bans/{ban_id}/revoke", post(revoke_ban_handler))
-        .route("/api/admins", get(list_admins_handler))
+        .route("/api/admins", get(list_admins_handler).post(create_admin_handler))
         .route("/api/admins/{admin_id}", patch(update_admin_handler))
         .route("/api/operation-logs", get(list_operation_logs_handler))
         .route("/api/users/summary", get(user_summary_handler))

@@ -17,6 +17,7 @@ import type {
   ServerSettingsDraft,
   UserSummary,
   WebsiteAdmin,
+  WebsiteAdminCreateDraft,
   WebsiteAdminUpdateDraft,
   WhitelistPlayer,
 } from '../types';
@@ -33,6 +34,7 @@ export interface KzGuardApi {
   logout: () => Promise<void>;
   loadState: () => Promise<AppState>;
   listWebsiteAdmins: () => Promise<WebsiteAdmin[]>;
+  createWebsiteAdmin: (draft: WebsiteAdminCreateDraft) => Promise<WebsiteAdmin>;
   updateWebsiteAdmin: (adminId: string, draft: WebsiteAdminUpdateDraft) => Promise<WebsiteAdmin>;
   listOperationLogs: () => Promise<OperationLog[]>;
   createCommunity: (name: string) => Promise<Community>;

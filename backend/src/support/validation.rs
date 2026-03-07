@@ -1,6 +1,6 @@
 use crate::{
     error::{AppError, AppResult},
-    http::requests::WebsiteAdminUpdateDraft,
+    http::requests::{WebsiteAdminCreateDraft, WebsiteAdminUpdateDraft},
 };
 use axum::http::StatusCode;
 use regex::Regex;
@@ -135,3 +135,22 @@ pub(crate) fn validate_website_admin_update_draft(
 
     Ok(())
 }
+
+pub(crate) fn validate_website_admin_create_draft(
+    draft: &WebsiteAdminCreateDraft,
+) -> AppResult<()> {
+    require_non_empty(&draft.username, "请输入用户名")?;
+    require_non_empty(&draft.display_name, "请输入管理员名称")?;
+    require_non_empty(&draft.password, "请输入初始密码")?;
+
+    if draft.password.trim().len() < 6 {
+        return Err(AppError::http(StatusCode::BAD_REQUEST, "密码至少需要 6 位"));
+    }
+
+    if draft.role != "system_admin" && draft.role != "normal_admin" {
+        return Err(AppError::http(StatusCode::BAD_REQUEST, "管理员角色不合法"));
+    }
+
+    Ok(())
+}
+

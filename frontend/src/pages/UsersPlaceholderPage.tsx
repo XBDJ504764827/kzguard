@@ -13,10 +13,10 @@ import {
   Tag,
   Typography,
 } from '@arco-design/web-react';
-import { IconEdit, IconUser } from '@arco-design/web-react/icon';
+import { IconEdit, IconPlus, IconUser } from '@arco-design/web-react/icon';
 import { useMemo, useState } from 'react';
 import { useAppStore } from '../contexts/AppStoreContext';
-import type { WebsiteAdmin, WebsiteAdminUpdateDraft } from '../types';
+import type { WebsiteAdmin, WebsiteAdminCreateDraft, WebsiteAdminUpdateDraft } from '../types';
 import { getErrorMessage } from '../utils/error';
 import {
   getPermissionSummary,
@@ -28,7 +28,19 @@ import {
 const { Row, Col } = Grid;
 const Option = Select.Option;
 
-const createEditDraft = (admin: WebsiteAdmin): WebsiteAdminUpdateDraft => ({
+type ModalMode = 'create' | 'edit';
+type AdminFormDraft = WebsiteAdminCreateDraft;
+
+const createEmptyDraft = (): AdminFormDraft => ({
+  username: '',
+  displayName: '',
+  password: '',
+  email: '',
+  note: '',
+  role: 'normal_admin',
+});
+
+const createEditDraft = (admin: WebsiteAdmin): AdminFormDraft => ({
   username: admin.username,
   displayName: admin.displayName,
   password: '',
@@ -47,10 +59,11 @@ const formatTime = (value: string) =>
   }).format(new Date(value));
 
 export const UsersPlaceholderPage = () => {
-  const { websiteUsers, currentAdmin, updateWebsiteAdmin, apiMode } = useAppStore();
-  const [editVisible, setEditVisible] = useState(false);
+  const { websiteUsers, currentAdmin, createWebsiteAdmin, updateWebsiteAdmin, apiMode } = useAppStore();
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalMode, setModalMode] = useState<ModalMode>('edit');
   const [editingAdminId, setEditingAdminId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<WebsiteAdminUpdateDraft | null>(null);
+  const [draft, setDraft] = useState<AdminFormDraft | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const isSystemAdmin = currentAdmin?.role === 'system_admin';
@@ -65,31 +78,45 @@ export const UsersPlaceholderPage = () => {
     [currentAdmin, websiteUsers],
   );
 
-  const openEditModal = (admin: WebsiteAdmin) => {
-    setEditingAdminId(admin.id);
-    setDraft(createEditDraft(admin));
-    setEditVisible(true);
+  const openCreateModal = () => {
+    setModalMode('create');
+    setEditingAdminId(null);
+    setDraft(createEmptyDraft());
+    setModalVisible(true);
   };
 
-  const closeEditModal = () => {
-    setEditVisible(false);
+  const openEditModal = (admin: WebsiteAdmin) => {
+    setModalMode('edit');
+    setEditingAdminId(admin.id);
+    setDraft(createEditDraft(admin));
+    setModalVisible(true);
+  };
+
+  const closeModal = () => {
+    setModalVisible(false);
     setEditingAdminId(null);
     setDraft(null);
   };
 
   const handleSave = async () => {
-    if (!editingAdminId || !draft) {
+    if (!draft) {
       return;
     }
 
     setSubmitting(true);
 
     try {
-      await updateWebsiteAdmin(editingAdminId, draft);
-      Message.success('管理员信息已更新');
-      closeEditModal();
+      if (modalMode === 'create') {
+        await createWebsiteAdmin(draft);
+        Message.success('管理员已创建，可使用该账号登录和退出');
+      } else if (editingAdminId) {
+        await updateWebsiteAdmin(editingAdminId, draft as WebsiteAdminUpdateDraft);
+        Message.success('管理员信息已更新');
+      }
+
+      closeModal();
     } catch (error) {
-      Message.error(getErrorMessage(error, '管理员信息更新失败'));
+      Message.error(getErrorMessage(error, modalMode === 'create' ? '管理员创建失败' : '管理员信息更新失败'));
     } finally {
       setSubmitting(false);
     }
@@ -145,7 +172,7 @@ export const UsersPlaceholderPage = () => {
           网站用户
         </Typography.Title>
         <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          当前已接入真实登录态：系统管理员可编辑全部管理员资料，普通管理员仅可编辑自己的用户名、密码和个人信息。
+          系统管理员现在可以新增网站管理员账号；新建账号提交成功后即可使用对应用户名和密码登录、退出管理后台。
         </Typography.Paragraph>
       </div>
 
@@ -202,7 +229,14 @@ export const UsersPlaceholderPage = () => {
       </Row>
 
       {isSystemAdmin ? (
-        <Card title="管理员列表">
+        <Card
+          title="管理员列表"
+          extra={
+            <Button type="primary" icon={<IconPlus />} onClick={openCreateModal}>
+              新增管理员
+            </Button>
+          }
+        >
           <Table rowKey="id" columns={columns} data={websiteUsers} pagination={false} />
         </Card>
       ) : null}
@@ -270,13 +304,19 @@ export const UsersPlaceholderPage = () => {
       </Row>
 
       <Modal
-        title={editingAdminId && currentAdmin?.id === editingAdminId ? '编辑我的信息' : '编辑管理员信息'}
-        visible={editVisible}
+        title={
+          modalMode === 'create'
+            ? '新增管理员'
+            : editingAdminId && currentAdmin?.id === editingAdminId
+              ? '编辑我的信息'
+              : '编辑管理员信息'
+        }
+        visible={modalVisible}
         confirmLoading={submitting}
         onOk={() => {
           void handleSave();
         }}
-        onCancel={closeEditModal}
+        onCancel={closeModal}
       >
         {draft ? (
           <Space direction="vertical" size="small" style={{ width: '100%' }}>
@@ -311,6 +351,17 @@ export const UsersPlaceholderPage = () => {
               </>
             ) : null}
 
+            <Typography.Text>{modalMode === 'create' ? '初始密码' : '新密码'}</Typography.Text>
+            <Input.Password
+              value={draft.password}
+              onChange={(value) => setDraft((currentDraft) => (currentDraft ? { ...currentDraft, password: value } : currentDraft))}
+              placeholder={modalMode === 'create' ? '请输入初始密码' : '留空则保持原密码不变'}
+            />
+
+            <Typography.Text type="secondary">
+              {modalMode === 'create' ? '新管理员后续可直接使用此账号密码登录与退出。' : '如不需要修改密码，可将该字段保持为空。'}
+            </Typography.Text>
+
             <Typography.Text>联系信息</Typography.Text>
             <Input
               allowClear
@@ -318,15 +369,6 @@ export const UsersPlaceholderPage = () => {
               onChange={(value) => setDraft((currentDraft) => (currentDraft ? { ...currentDraft, email: value } : currentDraft))}
               placeholder="请输入邮箱或其他联系方式"
             />
-
-            <Typography.Text>新密码</Typography.Text>
-            <Input.Password
-              value={draft.password}
-              onChange={(value) => setDraft((currentDraft) => (currentDraft ? { ...currentDraft, password: value } : currentDraft))}
-              placeholder="留空则保持原密码不变"
-            />
-
-            <Typography.Text type="secondary">如不需要修改密码，可将该字段保持为空。</Typography.Text>
 
             <Typography.Text>备注</Typography.Text>
             <Input.TextArea

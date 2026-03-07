@@ -7,7 +7,7 @@ pub(crate) mod operation_logs;
 pub(crate) mod users;
 pub(crate) mod whitelist;
 
-pub(crate) use admins::{list_admins_handler, update_admin_handler};
+pub(crate) use admins::{create_admin_handler, list_admins_handler, update_admin_handler};
 pub(crate) use bans::{
     create_manual_ban_handler, delete_ban_handler, list_bans_handler, revoke_ban_handler,
     update_ban_handler,

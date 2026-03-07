@@ -14,6 +14,7 @@ import type {
   ServerSettingsDraft,
   UserSummary,
   WebsiteAdmin,
+  WebsiteAdminCreateDraft,
   WebsiteAdminUpdateDraft,
 } from '../../types';
 import type { ApiEnvelope, KzGuardApi } from '../contracts';
@@ -55,6 +56,14 @@ export const httpApi: KzGuardApi = {
   },
   async listWebsiteAdmins() {
     const payload = await requestJson<ApiEnvelope<WebsiteAdmin[]>>('/admins');
+    return unwrap(payload);
+  },
+  async createWebsiteAdmin(draft: WebsiteAdminCreateDraft) {
+    const payload = await requestJson<ApiEnvelope<WebsiteAdmin>>('/admins', {
+      method: 'POST',
+      body: JSON.stringify(draft),
+    });
+
     return unwrap(payload);
   },
   async updateWebsiteAdmin(adminId: string, draft: WebsiteAdminUpdateDraft) {

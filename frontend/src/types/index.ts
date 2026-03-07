@@ -167,6 +167,15 @@ export interface AuthSession {
   admin: WebsiteAdmin;
 }
 
+export interface WebsiteAdminCreateDraft {
+  username: string;
+  displayName: string;
+  password: string;
+  email?: string;
+  note?: string;
+  role: WebsiteAdminRole;
+}
+
 export interface WebsiteAdminUpdateDraft {
   username: string;
   displayName: string;
@@ -190,6 +199,7 @@ export type OperationLogAction =
   | 'whitelist_rejected'
   | 'whitelist_manual_added'
   | 'whitelist_application_simulated'
+  | 'admin_created'
   | 'admin_profile_updated';
 
 export interface OperationLog {
