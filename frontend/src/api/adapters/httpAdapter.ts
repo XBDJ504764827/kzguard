@@ -11,6 +11,8 @@ import type {
   ManualWhitelistDraft,
   OperationLog,
   ServerDraft,
+  ServerPlayersSnapshot,
+  ServerRconVerificationResult,
   ServerSettingsDraft,
   UserSummary,
   WebsiteAdmin,
@@ -86,6 +88,27 @@ export const httpApi: KzGuardApi = {
 
     return unwrap(payload);
   },
+  async updateCommunity(communityId, name) {
+    const payload = await requestJson<ApiEnvelope<AppState['communities'][number]>>(`/communities/${communityId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    });
+
+    return unwrap(payload);
+  },
+  async deleteCommunity(communityId) {
+    await requestJson<{ message: string }>(`/communities/${communityId}`, {
+      method: 'DELETE',
+    });
+  },
+  async verifyServerRcon(communityId, draft): Promise<ServerRconVerificationResult> {
+    const payload = await requestJson<ApiEnvelope<ServerRconVerificationResult>>(`/communities/${communityId}/servers/verify-rcon`, {
+      method: 'POST',
+      body: JSON.stringify(draft),
+    });
+
+    return unwrap(payload);
+  },
   async createServer(communityId, draft) {
     const payload = await requestJson<ApiEnvelope<AppState['communities'][number]['servers'][number]>>(
       `/communities/${communityId}/servers`,
@@ -106,6 +129,17 @@ export const httpApi: KzGuardApi = {
       },
     );
 
+    return unwrap(payload);
+  },
+  async deleteServer(communityId, serverId) {
+    await requestJson<{ message: string }>(`/communities/${communityId}/servers/${serverId}`, {
+      method: 'DELETE',
+    });
+  },
+  async listServerPlayers(communityId: string, serverId: string): Promise<ServerPlayersSnapshot> {
+    const payload = await requestJson<ApiEnvelope<ServerPlayersSnapshot>>(
+      `/communities/${communityId}/servers/${serverId}/players`,
+    );
     return unwrap(payload);
   },
   async kickServerPlayer(communityId, serverId, playerId, reason) {

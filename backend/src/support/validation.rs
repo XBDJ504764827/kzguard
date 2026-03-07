@@ -26,6 +26,8 @@ pub(crate) fn validate_server_fields(
     ip: &str,
     port: i32,
     rcon_password: &str,
+    min_entry_rating: i32,
+    min_steam_level: i32,
 ) -> AppResult<()> {
     if let Some(name) = name {
         require_non_empty(name, "请输入服务器名称")?;
@@ -49,6 +51,20 @@ pub(crate) fn validate_server_fields(
         return Err(AppError::http(
             StatusCode::BAD_REQUEST,
             "RCON 密码至少需要 6 位",
+        ));
+    }
+
+    if min_entry_rating < 0 {
+        return Err(AppError::http(
+            StatusCode::BAD_REQUEST,
+            "最小进服 rating 不能小于 0",
+        ));
+    }
+
+    if min_steam_level < 0 {
+        return Err(AppError::http(
+            StatusCode::BAD_REQUEST,
+            "最小 Steam 等级不能小于 0",
         ));
     }
 

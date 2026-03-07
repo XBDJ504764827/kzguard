@@ -7,3 +7,5 @@ frontend/node_modules
 frontend/dist
 
 backend/target
+
+csgo-plugin/sourcemod-1.11.0-git6970-linux

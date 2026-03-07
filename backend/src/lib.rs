@@ -18,13 +18,21 @@ pub async fn run() -> anyhow::Result<()> {
     let pool = infra::mysql::init_database(&config)
         .await
         .context("failed to initialize mysql database")?;
+    let redis = infra::redis::init_redis(&config)
+        .await
+        .context("failed to initialize redis")?;
 
     println!(
         "mysql connected to {}:{}/{}",
         config.mysql.host, config.mysql.port, config.mysql.database
     );
+    println!("redis connected to {}", config.redis.url);
 
-    let state = Arc::new(state::AppState { pool });
+    let state = Arc::new(state::AppState {
+        pool,
+        redis,
+        player_presence_ttl_seconds: config.redis.player_presence_ttl_seconds,
+    });
     let app = http::build_router(state);
 
     let listener = TcpListener::bind(format!("{}:{}", config.host, config.port))

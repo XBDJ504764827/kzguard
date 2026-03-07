@@ -11,11 +11,22 @@ export interface LoginDraft {
 
 export interface ServerPlayer {
   id: string;
+  userId: number;
   nickname: string;
   steamId: string;
+  steamId64?: string;
+  steamId3?: string;
   ipAddress: string;
   connectedAt: string;
   ping: number;
+  lastReportedAt?: string;
+}
+
+export interface ServerPlayersSnapshot {
+  serverId: string;
+  reportedAt?: string;
+  playerCount: number;
+  players: ServerPlayer[];
 }
 
 export interface Server {
@@ -27,6 +38,9 @@ export interface Server {
   rconVerifiedAt: string;
   whitelistEnabled: boolean;
   entryVerificationEnabled: boolean;
+  minEntryRating: number;
+  minSteamLevel: number;
+  playerReportedAt?: string;
   onlinePlayers: ServerPlayer[];
 }
 
@@ -35,6 +49,10 @@ export interface Community {
   name: string;
   createdAt: string;
   servers: Server[];
+}
+
+export interface ServerRconVerificationResult {
+  verifiedAt: string;
 }
 
 export type WhitelistStatus = 'approved' | 'pending' | 'rejected';
@@ -99,6 +117,8 @@ export interface ServerDraft {
   rconPassword: string;
   whitelistEnabled: boolean;
   entryVerificationEnabled: boolean;
+  minEntryRating: number;
+  minSteamLevel: number;
 }
 
 export interface ServerSettingsDraft {
@@ -107,6 +127,8 @@ export interface ServerSettingsDraft {
   rconPassword: string;
   whitelistEnabled: boolean;
   entryVerificationEnabled: boolean;
+  minEntryRating: number;
+  minSteamLevel: number;
 }
 
 export interface BanServerPlayerDraft {
@@ -187,8 +209,11 @@ export interface WebsiteAdminUpdateDraft {
 
 export type OperationLogAction =
   | 'community_created'
+  | 'community_updated'
+  | 'community_deleted'
   | 'server_created'
   | 'server_updated'
+  | 'server_deleted'
   | 'server_player_kicked'
   | 'server_player_banned'
   | 'ban_record_manual_created'

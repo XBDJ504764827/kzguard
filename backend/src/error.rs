@@ -15,6 +15,10 @@ pub(crate) enum AppError {
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
     #[error(transparent)]
+    Redis(#[from] redis::RedisError),
+    #[error(transparent)]
+    SerdeJson(#[from] serde_json::Error),
+    #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 }
 
@@ -34,6 +38,16 @@ impl IntoResponse for AppError {
                 (status, Json(json!({ "message": message }))).into_response()
             }
             Self::Sqlx(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "message": error.to_string() })),
+            )
+                .into_response(),
+            Self::Redis(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "message": error.to_string() })),
+            )
+                .into_response(),
+            Self::SerdeJson(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "message": error.to_string() })),
             )

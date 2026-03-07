@@ -4,11 +4,36 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ServerPlayer {
     pub(crate) id: String,
+    pub(crate) user_id: i32,
     pub(crate) nickname: String,
     pub(crate) steam_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) steam_id64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) steam_id3: Option<String>,
     pub(crate) ip_address: String,
     pub(crate) connected_at: String,
     pub(crate) ping: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_reported_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ServerPlayersSnapshot {
+    pub(crate) server_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reported_at: Option<String>,
+    pub(crate) player_count: usize,
+    pub(crate) players: Vec<ServerPlayer>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ServerPresenceReceipt {
+    pub(crate) server_id: String,
+    pub(crate) reported_at: String,
+    pub(crate) player_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +47,10 @@ pub(crate) struct Server {
     pub(crate) rcon_verified_at: String,
     pub(crate) whitelist_enabled: bool,
     pub(crate) entry_verification_enabled: bool,
+    pub(crate) min_entry_rating: i32,
+    pub(crate) min_steam_level: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) player_reported_at: Option<String>,
     pub(crate) online_players: Vec<ServerPlayer>,
 }
 
@@ -32,6 +61,12 @@ pub(crate) struct Community {
     pub(crate) name: String,
     pub(crate) created_at: String,
     pub(crate) servers: Vec<Server>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RconVerificationResult {
+    pub(crate) verified_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

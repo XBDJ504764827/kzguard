@@ -176,3 +176,29 @@ body {
   display: inline-block;
   margin-bottom: 8px;
 }
+
+.community-server-list {
+  width: 100%;
+}
+
+.community-server-preview-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--kz-border);
+}
+
+.community-server-drawer-list {
+  max-height: calc(100vh - 240px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+@media (max-width: 768px) {
+  .community-server-preview-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

@@ -23,6 +23,8 @@ import type {
   OperationLogAction,
   Server,
   ServerDraft,
+  ServerPlayersSnapshot,
+  ServerRconVerificationResult,
   ServerSettingsDraft,
   ThemeMode,
   UserSummary,
@@ -58,8 +60,13 @@ interface AppStoreContextValue {
   createWebsiteAdmin: (draft: WebsiteAdminCreateDraft) => Promise<WebsiteAdmin>;
   updateWebsiteAdmin: (adminId: string, draft: WebsiteAdminUpdateDraft) => Promise<WebsiteAdmin>;
   addCommunity: (name: string) => Promise<Community>;
+  updateCommunity: (communityId: string, name: string) => Promise<Community>;
+  deleteCommunity: (communityId: string) => Promise<void>;
+  verifyServerRcon: (communityId: string, draft: ServerDraft) => Promise<ServerRconVerificationResult>;
   addServer: (communityId: string, draft: ServerDraft) => Promise<Server>;
   updateServer: (communityId: string, serverId: string, draft: ServerSettingsDraft) => Promise<Server>;
+  deleteServer: (communityId: string, serverId: string) => Promise<void>;
+  loadServerPlayers: (communityId: string, serverId: string) => Promise<ServerPlayersSnapshot>;
   kickServerPlayer: (communityId: string, serverId: string, playerId: string, reason: string) => Promise<void>;
   banServerPlayer: (communityId: string, serverId: string, playerId: string, draft: BanServerPlayerDraft) => Promise<void>;
   manualBanPlayer: (draft: ManualBanDraft) => Promise<BanRecord>;
@@ -74,12 +81,20 @@ interface AppStoreContextValue {
 
 const AppStoreContext = createContext<AppStoreContextValue | null>(null);
 
-const createId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
+const createId = (prefix: string) => {
+  const secureId = globalThis.crypto?.randomUUID?.();
+  const fallbackId = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+
+  return `${prefix}_${secureId ?? fallbackId}`;
+};
 const normalizeText = (value?: string) => value?.trim() || undefined;
 const normalizeServer = (server: Server, fallback?: Partial<Server>): Server => ({
   ...server,
   whitelistEnabled: server.whitelistEnabled ?? fallback?.whitelistEnabled ?? false,
   entryVerificationEnabled: server.entryVerificationEnabled ?? fallback?.entryVerificationEnabled ?? false,
+  minEntryRating: server.minEntryRating ?? fallback?.minEntryRating ?? 0,
+  minSteamLevel: server.minSteamLevel ?? fallback?.minSteamLevel ?? 0,
+  playerReportedAt: server.playerReportedAt ?? fallback?.playerReportedAt,
   onlinePlayers: Array.isArray(server.onlinePlayers) ? server.onlinePlayers : fallback?.onlinePlayers ?? [],
 });
 const getBanOperatorSnapshot = (admin: WebsiteAdmin | null): BanRecordOperator => {
@@ -156,6 +171,32 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     const nextState = await apiService.loadState();
     setState(nextState);
     setApiError(null);
+  };
+
+  const applyServerPlayersSnapshot = (communityId: string, serverId: string, snapshot: ServerPlayersSnapshot) => {
+    setState((currentState) => ({
+      ...currentState,
+      communities: currentState.communities.map((community) => {
+        if (community.id !== communityId) {
+          return community;
+        }
+
+        return {
+          ...community,
+          servers: community.servers.map((server) => {
+            if (server.id !== serverId) {
+              return server;
+            }
+
+            return {
+              ...server,
+              onlinePlayers: snapshot.players,
+              playerReportedAt: snapshot.reportedAt,
+            };
+          }),
+        };
+      }),
+    }));
   };
 
   useEffect(() => {
@@ -299,11 +340,69 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     return community;
   };
 
+  const updateCommunity = async (communityId: string, name: string) => {
+    const currentCommunity = state.communities.find((item) => item.id === communityId);
+
+    if (!currentCommunity) {
+      throw new Error('未找到要编辑的社区');
+    }
+
+    const updatedCommunity = await apiService.updateCommunity(communityId, name.trim());
+
+    setState((currentState) => ({
+      ...currentState,
+      communities: currentState.communities.map((community) =>
+        community.id === communityId ? updatedCommunity : community,
+      ),
+    }));
+    setApiError(null);
+
+    appendOperationLog(
+      'community_updated',
+      `将社区 “${currentCommunity.name}” 重命名为 “${updatedCommunity.name}”。`,
+    );
+
+    return updatedCommunity;
+  };
+
+  const deleteCommunity = async (communityId: string) => {
+    const community = state.communities.find((item) => item.id === communityId);
+
+    if (!community) {
+      throw new Error('未找到要删除的社区');
+    }
+
+    await apiService.deleteCommunity(communityId);
+
+    setState((currentState) => ({
+      ...currentState,
+      communities: currentState.communities.filter((item) => item.id !== communityId),
+    }));
+    setApiError(null);
+
+    appendOperationLog('community_deleted', `删除了社区 “${community.name}”。`);
+  };
+
+  const verifyServerRcon = async (communityId: string, draft: ServerDraft) => {
+    const result = await apiService.verifyServerRcon(communityId, {
+      ...draft,
+      name: draft.name.trim(),
+      ip: draft.ip.trim(),
+      rconPassword: draft.rconPassword,
+    });
+
+    setApiError(null);
+
+    return result;
+  };
+
   const addServer = async (communityId: string, draft: ServerDraft) => {
     const createdServer = await apiService.createServer(communityId, draft);
     const server = normalizeServer(createdServer, {
       whitelistEnabled: draft.whitelistEnabled,
       entryVerificationEnabled: draft.entryVerificationEnabled,
+      minEntryRating: draft.minEntryRating,
+      minSteamLevel: draft.minSteamLevel,
       onlinePlayers: [],
     });
     const community = state.communities.find((item) => item.id === communityId);
@@ -339,6 +438,8 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       ...currentServer,
       whitelistEnabled: draft.whitelistEnabled,
       entryVerificationEnabled: draft.entryVerificationEnabled,
+      minEntryRating: draft.minEntryRating,
+      minSteamLevel: draft.minSteamLevel,
     });
 
     setState((currentState) => ({
@@ -362,6 +463,46 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     );
 
     return server;
+  };
+
+  const deleteServer = async (communityId: string, serverId: string) => {
+    const community = state.communities.find((item) => item.id === communityId);
+    const server = community?.servers.find((item) => item.id === serverId);
+
+    if (!community || !server) {
+      throw new Error('未找到要删除的服务器');
+    }
+
+    await apiService.deleteServer(communityId, serverId);
+
+    setState((currentState) => ({
+      ...currentState,
+      communities: currentState.communities.map((communityItem) => {
+        if (communityItem.id !== communityId) {
+          return communityItem;
+        }
+
+        return {
+          ...communityItem,
+          servers: communityItem.servers.filter((serverItem) => serverItem.id !== serverId),
+        };
+      }),
+    }));
+    setApiError(null);
+
+    appendOperationLog(
+      'server_deleted',
+      `删除了社区 “${community.name}” 下的服务器 ${server.name}（${server.ip}:${server.port}）。`,
+    );
+  };
+
+  const loadServerPlayers = async (communityId: string, serverId: string) => {
+    const snapshot = await apiService.listServerPlayers(communityId, serverId);
+
+    applyServerPlayersSnapshot(communityId, serverId, snapshot);
+    setApiError(null);
+
+    return snapshot;
   };
 
   const kickServerPlayer = async (communityId: string, serverId: string, playerId: string, reason: string) => {
@@ -645,8 +786,13 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       createWebsiteAdmin,
       updateWebsiteAdmin,
       addCommunity,
+      updateCommunity,
+      deleteCommunity,
+      verifyServerRcon,
       addServer,
       updateServer,
+      deleteServer,
+      loadServerPlayers,
       kickServerPlayer,
       banServerPlayer,
       manualBanPlayer,

@@ -14,6 +14,8 @@ import type {
   OperationLog,
   Server,
   ServerDraft,
+  ServerPlayersSnapshot,
+  ServerRconVerificationResult,
   ServerSettingsDraft,
   UserSummary,
   WebsiteAdmin,
@@ -38,8 +40,13 @@ export interface KzGuardApi {
   updateWebsiteAdmin: (adminId: string, draft: WebsiteAdminUpdateDraft) => Promise<WebsiteAdmin>;
   listOperationLogs: () => Promise<OperationLog[]>;
   createCommunity: (name: string) => Promise<Community>;
+  updateCommunity: (communityId: string, name: string) => Promise<Community>;
+  deleteCommunity: (communityId: string) => Promise<void>;
+  verifyServerRcon: (communityId: string, draft: ServerDraft) => Promise<ServerRconVerificationResult>;
   createServer: (communityId: string, draft: ServerDraft) => Promise<Server>;
   updateServer: (communityId: string, serverId: string, draft: ServerSettingsDraft) => Promise<Server>;
+  deleteServer: (communityId: string, serverId: string) => Promise<void>;
+  listServerPlayers: (communityId: string, serverId: string) => Promise<ServerPlayersSnapshot>;
   kickServerPlayer: (communityId: string, serverId: string, playerId: string, reason: string) => Promise<void>;
   banServerPlayer: (
     communityId: string,

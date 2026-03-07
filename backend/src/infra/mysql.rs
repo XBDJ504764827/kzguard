@@ -48,6 +48,22 @@ pub(crate) async fn create_database_if_needed(config: &MySqlConfig) -> AppResult
     Ok(())
 }
 
+async fn ensure_servers_column(pool: &MySqlPool, column_name: &str, column_ddl: &str) -> AppResult<()> {
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'servers' AND COLUMN_NAME = ?",
+    )
+    .bind(column_name)
+    .fetch_one(pool)
+    .await?;
+
+    if exists == 0 {
+        let sql = format!("ALTER TABLE servers ADD COLUMN {} {}", column_name, column_ddl);
+        sqlx::query(&sql).execute(pool).await?;
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn create_tables(pool: &MySqlPool) -> AppResult<()> {
     pool.execute(
         r#"
@@ -72,12 +88,17 @@ pub(crate) async fn create_tables(pool: &MySqlPool) -> AppResult<()> {
           rcon_verified_at DATETIME(3) NOT NULL,
           whitelist_enabled TINYINT(1) NOT NULL DEFAULT 0,
           entry_verification_enabled TINYINT(1) NOT NULL DEFAULT 0,
+          min_entry_rating INT NOT NULL DEFAULT 0,
+          min_steam_level INT NOT NULL DEFAULT 0,
           CONSTRAINT fk_servers_community FOREIGN KEY (community_id) REFERENCES communities(id) ON DELETE CASCADE,
           INDEX idx_servers_community_id (community_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         "#,
     )
     .await?;
+
+    ensure_servers_column(pool, "min_entry_rating", "INT NOT NULL DEFAULT 0").await?;
+    ensure_servers_column(pool, "min_steam_level", "INT NOT NULL DEFAULT 0").await?;
 
     pool.execute(
         r#"
@@ -226,8 +247,8 @@ pub(crate) async fn seed_if_empty(pool: &MySqlPool) -> AppResult<()> {
             sqlx::query(
                 r#"
                 INSERT INTO servers (
-                  id, community_id, name, ip, port, rcon_password, rcon_verified_at, whitelist_enabled, entry_verification_enabled
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  id, community_id, name, ip, port, rcon_password, rcon_verified_at, whitelist_enabled, entry_verification_enabled, min_entry_rating, min_steam_level
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&server.id)
@@ -239,6 +260,8 @@ pub(crate) async fn seed_if_empty(pool: &MySqlPool) -> AppResult<()> {
             .bind(iso_to_mysql(&server.rcon_verified_at))
             .bind(bool_to_i32(server.whitelist_enabled))
             .bind(bool_to_i32(server.entry_verification_enabled))
+            .bind(server.min_entry_rating)
+            .bind(server.min_steam_level)
             .execute(&mut *tx)
             .await?;
 

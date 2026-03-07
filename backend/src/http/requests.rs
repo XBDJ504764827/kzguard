@@ -12,6 +12,11 @@ pub(crate) struct CreateCommunityBody {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct UpdateCommunityBody {
+    pub(crate) name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ServerDraft {
     pub(crate) name: String,
@@ -20,6 +25,8 @@ pub(crate) struct ServerDraft {
     pub(crate) rcon_password: String,
     pub(crate) whitelist_enabled: bool,
     pub(crate) entry_verification_enabled: bool,
+    pub(crate) min_entry_rating: i32,
+    pub(crate) min_steam_level: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +37,28 @@ pub(crate) struct ServerSettingsDraft {
     pub(crate) rcon_password: String,
     pub(crate) whitelist_enabled: bool,
     pub(crate) entry_verification_enabled: bool,
+    pub(crate) min_entry_rating: i32,
+    pub(crate) min_steam_level: i32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ServerPresencePlayerReport {
+    pub(crate) user_id: i32,
+    pub(crate) nickname: String,
+    pub(crate) steam_id: String,
+    pub(crate) steam_id64: Option<String>,
+    pub(crate) steam_id3: Option<String>,
+    pub(crate) ip_address: Option<String>,
+    pub(crate) connected_seconds: i64,
+    pub(crate) ping: i32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ServerPresenceReportBody {
+    pub(crate) server_id: String,
+    pub(crate) players: Vec<ServerPresencePlayerReport>,
 }
 
 #[derive(Debug, Deserialize)]

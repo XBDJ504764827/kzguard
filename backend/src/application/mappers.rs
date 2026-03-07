@@ -3,17 +3,6 @@ use crate::{
     support::time::naive_to_iso,
 };
 
-pub(crate) fn map_server_player(row: DbServerPlayer) -> ServerPlayer {
-    ServerPlayer {
-        id: row.id,
-        nickname: row.nickname,
-        steam_id: row.steam_id,
-        ip_address: row.ip_address,
-        connected_at: naive_to_iso(row.connected_at),
-        ping: row.ping,
-    }
-}
-
 pub(crate) fn map_whitelist_player(row: DbWhitelistPlayer) -> WhitelistPlayer {
     WhitelistPlayer {
         id: row.id,

@@ -1,10 +1,10 @@
 use crate::{
     application::{
-        admins::get_operator_snapshot, mappers::map_ban_record,
-        operation_logs::append_operation_log,
+        admins::get_operator_snapshot, communities::{ensure_kzguard_command_available, quote_rcon_argument},
+        mappers::map_ban_record, operation_logs::append_operation_log, server_presence,
     },
     domain::{
-        db::{DbBanRecord, DbBanTarget},
+        db::DbBanRecord,
         models::{BanRecord, OperatorSnapshot},
     },
     error::{AppError, AppResult},
@@ -13,16 +13,20 @@ use crate::{
     support::{
         convert::trim_to_none,
         ids::prefixed_id,
+        rcon::execute_rcon_command,
         steam::resolve_steam_identifiers,
         time::{iso_to_mysql, now_iso},
         validation::validate_ban_draft,
     },
 };
 use axum::http::StatusCode;
+use redis::Client as RedisClient;
 use sqlx::MySqlPool;
 
 pub(crate) async fn ban_server_player(
     pool: &MySqlPool,
+    redis: &RedisClient,
+    ttl_seconds: u64,
     community_id: &str,
     server_id: &str,
     player_id: &str,
@@ -38,46 +42,50 @@ pub(crate) async fn ban_server_player(
     )?;
 
     let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
-    let mut tx = pool.begin().await?;
-
-    let player = sqlx::query_as::<_, DbBanTarget>(
-        r#"
-        SELECT sp.nickname, sp.steam_id, sp.ip_address, s.name AS server_name, c.name AS community_name
-          FROM server_players sp
-          INNER JOIN servers s ON s.id = sp.server_id
-          INNER JOIN communities c ON c.id = s.community_id
-         WHERE sp.id = ? AND sp.server_id = ? AND c.id = ?
-        "#,
-    )
-    .bind(player_id)
-    .bind(server_id)
-    .bind(community_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-
-    let player = player
-        .ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到要封禁的玩家或服务器"))?;
+    let target =
+        server_presence::resolve_live_player_target(pool, redis, community_id, server_id, player_id)
+            .await?;
 
     let ban = create_ban_record(
-        trim_to_none(Some(player.nickname.clone())),
-        draft.ban_type,
-        player.steam_id,
-        draft.ip_address.or_else(|| Some(player.ip_address)),
-        draft.reason,
+        trim_to_none(Some(target.player.nickname.clone())),
+        draft.ban_type.clone(),
+        target.player.steam_id.clone(),
+        draft
+            .ip_address
+            .or_else(|| Some(target.player.ip_address.clone())),
+        draft.reason.clone(),
         draft.duration_seconds,
-        player.server_name,
-        Some(player.community_name),
+        target.server_name.clone(),
+        Some(target.community_name.clone()),
         &operator,
         "server_action",
     )?;
 
+    let duration_seconds = draft.duration_seconds.unwrap_or(0).max(0);
+    let command = format!(
+        "kzguard_ban_userid {} {} {} {}",
+        target.player.user_id,
+        if draft.ban_type == "ip" { "ip" } else { "steam" },
+        duration_seconds,
+        quote_rcon_argument(draft.reason.trim()),
+    );
+
+    let response = execute_rcon_command(
+        &target.ip,
+        target.port,
+        &target.rcon_password,
+        &command,
+    )
+    .await
+    .map_err(|message| AppError::http(StatusCode::BAD_REQUEST, message))?;
+
+    ensure_kzguard_command_available(&response)?;
+
+    let mut tx = pool.begin().await?;
     insert_ban_record(&mut *tx, &ban).await?;
-    sqlx::query("DELETE FROM server_players WHERE id = ? AND server_id = ?")
-        .bind(player_id)
-        .bind(server_id)
-        .execute(&mut *tx)
-        .await?;
     tx.commit().await?;
+
+    server_presence::remove_player_from_snapshot(redis, ttl_seconds, server_id, player_id).await?;
 
     append_operation_log(
         pool,
@@ -192,8 +200,8 @@ pub(crate) async fn update_ban_record(
     let updated_at = now_iso();
 
     let updated = BanRecord {
-        id: existing.id,
-        nickname: trim_to_none(draft.nickname),
+        id: existing.id.clone(),
+        nickname: trim_to_none(draft.nickname).or(existing.nickname.clone()),
         ban_type: draft.ban_type,
         status: existing.status,
         steam_identifier: draft.steam_identifier.trim().to_string(),

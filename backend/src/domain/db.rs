@@ -19,17 +19,23 @@ pub(crate) struct DbServer {
     pub(crate) rcon_verified_at: NaiveDateTime,
     pub(crate) whitelist_enabled: i8,
     pub(crate) entry_verification_enabled: i8,
+    pub(crate) min_entry_rating: i32,
+    pub(crate) min_steam_level: i32,
 }
 
 #[derive(Debug, FromRow)]
-pub(crate) struct DbServerPlayer {
+pub(crate) struct DbServerPresenceAuth {
     pub(crate) id: String,
-    pub(crate) server_id: String,
-    pub(crate) nickname: String,
-    pub(crate) steam_id: String,
-    pub(crate) ip_address: String,
-    pub(crate) connected_at: NaiveDateTime,
-    pub(crate) ping: i32,
+    pub(crate) rcon_password: String,
+}
+
+#[derive(Debug, FromRow)]
+pub(crate) struct DbLiveServerTarget {
+    pub(crate) name: String,
+    pub(crate) community_name: String,
+    pub(crate) ip: String,
+    pub(crate) port: i32,
+    pub(crate) rcon_password: String,
 }
 
 #[derive(Debug, FromRow)]
@@ -109,16 +115,9 @@ pub(crate) struct DbServerWithCommunity {
 }
 
 #[derive(Debug, FromRow)]
-pub(crate) struct DbKickTarget {
-    pub(crate) nickname: String,
-    pub(crate) server_name: String,
-}
-
-#[derive(Debug, FromRow)]
-pub(crate) struct DbBanTarget {
-    pub(crate) nickname: String,
-    pub(crate) steam_id: String,
-    pub(crate) ip_address: String,
-    pub(crate) server_name: String,
+pub(crate) struct DbServerDeleteTarget {
+    pub(crate) name: String,
+    pub(crate) ip: String,
+    pub(crate) port: i32,
     pub(crate) community_name: String,
 }

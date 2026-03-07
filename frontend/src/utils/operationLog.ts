@@ -2,8 +2,11 @@ import type { OperationLogAction } from '../types';
 
 export const operationLogActionLabelMap: Record<OperationLogAction, string> = {
   community_created: '新增社区',
+  community_updated: '编辑社区',
+  community_deleted: '删除社区',
   server_created: '新增服务器',
   server_updated: '更新服务器设置',
+  server_deleted: '删除服务器',
   server_player_kicked: '踢出服务器玩家',
   server_player_banned: '封禁服务器玩家',
   ban_record_manual_created: '手动添加封禁记录',

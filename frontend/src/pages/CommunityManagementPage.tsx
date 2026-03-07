@@ -16,10 +16,17 @@ import {
   Tag,
   Typography,
 } from '@arco-design/web-react';
-import { IconPlus } from '@arco-design/web-react/icon';
+import { IconDelete, IconEdit, IconPlus } from '@arco-design/web-react/icon';
 import { useMemo, useState } from 'react';
 import { useAppStore } from '../contexts/AppStoreContext';
-import type { BanType, Community, Server, ServerDraft, ServerSettingsDraft } from '../types';
+import type {
+  BanType,
+  Community,
+  Server,
+  ServerDraft,
+  ServerRconVerificationResult,
+  ServerSettingsDraft,
+} from '../types';
 import { banTypeLabelMap, getBanDurationLabel, getBanTypeDescription } from '../utils/ban';
 import { getErrorMessage } from '../utils/error';
 
@@ -35,6 +42,10 @@ type PlayerActionType = 'kick' | 'ban';
 type PlayerActionTarget = ServerTarget & {
   playerId: string;
   actionType: PlayerActionType;
+};
+
+type ServerVerificationState = ServerRconVerificationResult & {
+  fingerprint: string;
 };
 
 const formatTime = (value: string) =>
@@ -53,6 +64,8 @@ const createEmptyServerDraft = (): ServerDraft => ({
   rconPassword: '',
   whitelistEnabled: false,
   entryVerificationEnabled: false,
+  minEntryRating: 0,
+  minSteamLevel: 0,
 });
 
 const createEmptyServerSettingsDraft = (): ServerSettingsDraft => ({
@@ -61,6 +74,8 @@ const createEmptyServerSettingsDraft = (): ServerSettingsDraft => ({
   rconPassword: '',
   whitelistEnabled: false,
   entryVerificationEnabled: false,
+  minEntryRating: 0,
+  minSteamLevel: 0,
 });
 
 const createServerSettingsDraft = (server: Server): ServerSettingsDraft => ({
@@ -69,16 +84,12 @@ const createServerSettingsDraft = (server: Server): ServerSettingsDraft => ({
   rconPassword: server.rconPassword,
   whitelistEnabled: server.whitelistEnabled ?? false,
   entryVerificationEnabled: server.entryVerificationEnabled ?? false,
+  minEntryRating: server.minEntryRating ?? 0,
+  minSteamLevel: server.minSteamLevel ?? 0,
 });
 
-const validateServerDraft = (
-  draft: Pick<ServerDraft, 'ip' | 'port' | 'rconPassword'> & Partial<Pick<ServerDraft, 'name'>>,
-) => {
+const validateServerConnectionDraft = (draft: Pick<ServerDraft, 'ip' | 'port' | 'rconPassword'>) => {
   const ipv4Pattern = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-
-  if (typeof draft.name === 'string' && !draft.name.trim()) {
-    return '请输入服务器名称';
-  }
 
   if (!ipv4Pattern.test(draft.ip.trim())) {
     return '请输入有效的 IPv4 地址';
@@ -95,9 +106,41 @@ const validateServerDraft = (
   return null;
 };
 
+const validateEntryVerificationThresholds = (
+  draft: Pick<ServerDraft, 'minEntryRating' | 'minSteamLevel'>,
+) => {
+  if (draft.minEntryRating < 0) {
+    return '最小进服 rating 不能小于 0';
+  }
+
+  if (draft.minSteamLevel < 0) {
+    return '最小 Steam 等级不能小于 0';
+  }
+
+  return null;
+};
+
+const validateServerDraft = (
+  draft: Pick<ServerDraft, 'ip' | 'port' | 'rconPassword' | 'minEntryRating' | 'minSteamLevel'> & Partial<Pick<ServerDraft, 'name'>>,
+) => {
+  if (typeof draft.name === 'string' && !draft.name.trim()) {
+    return '请输入服务器名称';
+  }
+
+  return validateServerConnectionDraft(draft) ?? validateEntryVerificationThresholds(draft);
+};
+
+const createServerVerificationFingerprint = (draft: Pick<ServerDraft, 'ip' | 'port' | 'rconPassword'>) =>
+  `${draft.ip.trim()}|${draft.port}|${draft.rconPassword}`;
+
+const COMMUNITY_SERVER_PREVIEW_COUNT = 3;
+
+const getEntryVerificationThresholdLabel = (server: Pick<Server, 'minEntryRating' | 'minSteamLevel'>) =>
+  `最低进服 rating ${server.minEntryRating}，最低 Steam 等级 ${server.minSteamLevel}`;
+
 const getServerAccessSummary = (server: Server) => {
   if (server.whitelistEnabled && server.entryVerificationEnabled) {
-    return '当前已同时启用白名单和进服验证。';
+    return `当前已同时启用白名单和进服验证，${getEntryVerificationThresholdLabel(server)}。`;
   }
 
   if (server.whitelistEnabled) {
@@ -105,7 +148,7 @@ const getServerAccessSummary = (server: Server) => {
   }
 
   if (server.entryVerificationEnabled) {
-    return '当前仅开启进服验证，适合临时验权场景。';
+    return `当前仅开启进服验证，${getEntryVerificationThresholdLabel(server)}。`;
   }
 
   return '当前未开启白名单和进服验证。';
@@ -115,8 +158,13 @@ export const CommunityManagementPage = () => {
   const {
     state,
     addCommunity,
+    updateCommunity,
+    deleteCommunity,
+    verifyServerRcon,
     addServer,
     updateServer,
+    deleteServer,
+    loadServerPlayers,
     kickServerPlayer,
     banServerPlayer,
     apiMode,
@@ -124,13 +172,17 @@ export const CommunityManagementPage = () => {
     bootstrapping,
   } = useAppStore();
   const [communityModalVisible, setCommunityModalVisible] = useState(false);
+  const [communityEditModalVisible, setCommunityEditModalVisible] = useState(false);
   const [serverDrawerVisible, setServerDrawerVisible] = useState(false);
   const [serverSettingsVisible, setServerSettingsVisible] = useState(false);
   const [playerDrawerVisible, setPlayerDrawerVisible] = useState(false);
   const [communityName, setCommunityName] = useState('');
+  const [editingCommunityName, setEditingCommunityName] = useState('');
   const [serverDraft, setServerDraft] = useState<ServerDraft>(createEmptyServerDraft);
   const [serverSettingsDraft, setServerSettingsDraft] = useState<ServerSettingsDraft>(createEmptyServerSettingsDraft);
   const [selectedCommunity, setSelectedCommunity] = useState<Community | null>(null);
+  const [editingCommunity, setEditingCommunity] = useState<Community | null>(null);
+  const [serverListCommunityId, setServerListCommunityId] = useState<string | null>(null);
   const [serverSettingsTarget, setServerSettingsTarget] = useState<ServerTarget | null>(null);
   const [playerDrawerTarget, setPlayerDrawerTarget] = useState<ServerTarget | null>(null);
   const [playerActionTarget, setPlayerActionTarget] = useState<PlayerActionTarget | null>(null);
@@ -140,8 +192,12 @@ export const CommunityManagementPage = () => {
   const [banDurationSeconds, setBanDurationSeconds] = useState<number | undefined>(undefined);
   const [submittingServer, setSubmittingServer] = useState(false);
   const [submittingCommunity, setSubmittingCommunity] = useState(false);
+  const [submittingCommunityEdit, setSubmittingCommunityEdit] = useState(false);
   const [submittingServerSettings, setSubmittingServerSettings] = useState(false);
   const [submittingPlayerAction, setSubmittingPlayerAction] = useState(false);
+  const [loadingPlayerDrawer, setLoadingPlayerDrawer] = useState(false);
+  const [verifyingServer, setVerifyingServer] = useState(false);
+  const [serverVerification, setServerVerification] = useState<ServerVerificationState | null>(null);
 
   const totalServerCount = useMemo(
     () => state.communities.reduce((count, community) => count + community.servers.length, 0),
@@ -191,10 +247,34 @@ export const CommunityManagementPage = () => {
     return community && server && player ? { community, server, player } : null;
   }, [playerActionTarget, state.communities]);
 
+  const serverListCommunity = useMemo(() => {
+    if (!serverListCommunityId) {
+      return null;
+    }
+
+    return state.communities.find((item) => item.id === serverListCommunityId) ?? null;
+  }, [serverListCommunityId, state.communities]);
+
+  const serverDraftVerificationFingerprint = useMemo(
+    () => createServerVerificationFingerprint(serverDraft),
+    [serverDraft.ip, serverDraft.port, serverDraft.rconPassword],
+  );
+  const serverDraftVerified = serverVerification?.fingerprint === serverDraftVerificationFingerprint;
+  const serverDraftVerificationStale = Boolean(serverVerification && !serverDraftVerified);
+
   const openServerDrawer = (community: Community) => {
     setSelectedCommunity(community);
     setServerDraft(createEmptyServerDraft());
+    setServerVerification(null);
     setServerDrawerVisible(true);
+  };
+
+  const openServerListDrawer = (communityId: string) => {
+    setServerListCommunityId(communityId);
+  };
+
+  const closeServerListDrawer = () => {
+    setServerListCommunityId(null);
   };
 
   const openServerSettingsDrawer = (communityId: string, server: Server) => {
@@ -203,9 +283,35 @@ export const CommunityManagementPage = () => {
     setServerSettingsVisible(true);
   };
 
-  const openPlayerDrawer = (communityId: string, serverId: string) => {
+  const openPlayerDrawer = async (communityId: string, serverId: string) => {
     setPlayerDrawerTarget({ communityId, serverId });
     setPlayerDrawerVisible(true);
+    setLoadingPlayerDrawer(true);
+
+    try {
+      await loadServerPlayers(communityId, serverId);
+    } catch (error) {
+      Message.error(getErrorMessage(error, '在线玩家加载失败'));
+    } finally {
+      setLoadingPlayerDrawer(false);
+    }
+  };
+
+  const handleRefreshPlayerDrawer = async () => {
+    if (!playerDrawerTarget) {
+      return;
+    }
+
+    setLoadingPlayerDrawer(true);
+
+    try {
+      await loadServerPlayers(playerDrawerTarget.communityId, playerDrawerTarget.serverId);
+      Message.success('在线玩家已刷新');
+    } catch (error) {
+      Message.error(getErrorMessage(error, '在线玩家刷新失败'));
+    } finally {
+      setLoadingPlayerDrawer(false);
+    }
   };
 
   const openPlayerActionModal = (target: PlayerActionTarget) => {
@@ -222,6 +328,18 @@ export const CommunityManagementPage = () => {
     setBanType('steam_account');
     setBanMode('permanent');
     setBanDurationSeconds(undefined);
+  };
+
+  const openCommunityEditModal = (community: Community) => {
+    setEditingCommunity(community);
+    setEditingCommunityName(community.name);
+    setCommunityEditModalVisible(true);
+  };
+
+  const closeCommunityEditModal = () => {
+    setCommunityEditModalVisible(false);
+    setEditingCommunity(null);
+    setEditingCommunityName('');
   };
 
   const handleCreateCommunity = async () => {
@@ -246,6 +364,142 @@ export const CommunityManagementPage = () => {
     }
   };
 
+  const handleUpdateCommunity = async () => {
+    if (!editingCommunity) {
+      return;
+    }
+
+    const trimmedName = editingCommunityName.trim();
+
+    if (!trimmedName) {
+      Message.warning('请输入社区名称');
+      return;
+    }
+
+    setSubmittingCommunityEdit(true);
+
+    try {
+      const updatedCommunity = await updateCommunity(editingCommunity.id, trimmedName);
+
+      if (selectedCommunity?.id === updatedCommunity.id) {
+        setSelectedCommunity(updatedCommunity);
+      }
+
+      closeCommunityEditModal();
+      Message.success('社区名称已更新');
+    } catch (error) {
+      Message.error(getErrorMessage(error, '社区名称更新失败'));
+    } finally {
+      setSubmittingCommunityEdit(false);
+    }
+  };
+
+  const handleVerifyServerDraft = async () => {
+    if (!selectedCommunity) {
+      return;
+    }
+
+    const errorMessage = validateServerConnectionDraft(serverDraft);
+
+    if (errorMessage) {
+      Message.warning(errorMessage);
+      return;
+    }
+
+    setVerifyingServer(true);
+
+    try {
+      const result = await verifyServerRcon(selectedCommunity.id, serverDraft);
+      setServerVerification({
+        ...result,
+        fingerprint: createServerVerificationFingerprint(serverDraft),
+      });
+      Message.success('RCON 校验通过，可以添加服务器');
+    } catch (error) {
+      Message.error(getErrorMessage(error, 'RCON 校验失败'));
+    } finally {
+      setVerifyingServer(false);
+    }
+  };
+
+  const handleDeleteCommunity = (community: Community) => {
+    Modal.confirm({
+      title: '删除社区',
+      content: `确认删除社区“${community.name}”吗？该社区下已添加的服务器和在线玩家记录将一并移除。`,
+      okText: '确认删除',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await deleteCommunity(community.id);
+
+          if (selectedCommunity?.id === community.id) {
+            setSelectedCommunity(null);
+            setServerDrawerVisible(false);
+            setServerDraft(createEmptyServerDraft());
+          }
+
+          if (serverSettingsTarget?.communityId === community.id) {
+            setServerSettingsTarget(null);
+            setServerSettingsVisible(false);
+            setServerSettingsDraft(createEmptyServerSettingsDraft());
+          }
+
+          if (playerDrawerTarget?.communityId === community.id) {
+            setPlayerDrawerTarget(null);
+            setPlayerDrawerVisible(false);
+          }
+
+          if (playerActionTarget?.communityId === community.id) {
+            closePlayerActionModal();
+          }
+
+          if (serverListCommunityId === community.id) {
+            closeServerListDrawer();
+          }
+
+          Message.success(`社区“${community.name}”已删除`);
+        } catch (error) {
+          Message.error(getErrorMessage(error, '社区删除失败'));
+          throw error;
+        }
+      },
+    });
+  };
+
+  const handleDeleteServer = (community: Community, server: Server) => {
+    Modal.confirm({
+      title: '删除服务器',
+      content: `确认删除服务器“${server.name}”（${server.ip}:${server.port}）吗？该服务器下的在线玩家记录将一并移除。`,
+      okText: '确认删除',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await deleteServer(community.id, server.id);
+
+          if (serverSettingsTarget?.communityId === community.id && serverSettingsTarget.serverId === server.id) {
+            setServerSettingsTarget(null);
+            setServerSettingsVisible(false);
+            setServerSettingsDraft(createEmptyServerSettingsDraft());
+          }
+
+          if (playerDrawerTarget?.communityId === community.id && playerDrawerTarget.serverId === server.id) {
+            setPlayerDrawerTarget(null);
+            setPlayerDrawerVisible(false);
+          }
+
+          if (playerActionTarget?.communityId === community.id && playerActionTarget.serverId === server.id) {
+            closePlayerActionModal();
+          }
+
+          Message.success(`服务器“${server.name}”已删除`);
+        } catch (error) {
+          Message.error(getErrorMessage(error, '服务器删除失败'));
+          throw error;
+        }
+      },
+    });
+  };
+
   const handleCreateServer = async () => {
     if (!selectedCommunity) {
       return;
@@ -258,12 +512,18 @@ export const CommunityManagementPage = () => {
       return;
     }
 
+    if (!serverDraftVerified) {
+      Message.warning('请先完成 RCON 校验后再添加服务器');
+      return;
+    }
+
     setSubmittingServer(true);
 
     try {
       await addServer(selectedCommunity.id, serverDraft);
       setServerDrawerVisible(false);
       setServerDraft(createEmptyServerDraft());
+      setServerVerification(null);
       Message.success('RCON 验证通过，服务器已添加');
     } catch (error) {
       Message.error(getErrorMessage(error, '服务器添加失败'));
@@ -344,6 +604,69 @@ export const CommunityManagementPage = () => {
     }
   };
 
+  const renderServerList = (community: Community, servers: Server[]) => (
+    <Space direction="vertical" size="medium" style={{ width: '100%' }} className="community-server-list">
+      {servers.map((server) => (
+        <div className="server-item" key={server.id}>
+          <div className="server-item-header">
+            <Space direction="vertical" size="small" style={{ flex: 1 }}>
+              <Space align="center" size="small" wrap>
+                <Typography.Text style={{ fontWeight: 600 }}>{server.name}</Typography.Text>
+                <Tag color="green">RCON 已验证</Tag>
+                <Tag color={server.whitelistEnabled ? 'green' : 'gray'}>
+                  白名单{server.whitelistEnabled ? '开启' : '关闭'}
+                </Tag>
+                <Tag color={server.entryVerificationEnabled ? 'arcoblue' : 'gray'}>
+                  进服验证{server.entryVerificationEnabled ? '开启' : '关闭'}
+                </Tag>
+                {server.entryVerificationEnabled ? (
+                  <>
+                    <Tag color="purple">Rating ≥ {server.minEntryRating}</Tag>
+                    <Tag color="gold">Steam 等级 ≥ {server.minSteamLevel}</Tag>
+                  </>
+                ) : null}
+              </Space>
+
+              <Space size="small" wrap>
+                <Tag>服务器 ID：{server.id}</Tag>
+                <Tag>
+                  {server.ip}:{server.port}
+                </Tag>
+                <Tag color="orange">在线 {server.onlinePlayers.length} 人</Tag>
+                {server.playerReportedAt ? (
+                  <Tag color="arcoblue">最近上报 {formatTime(server.playerReportedAt)}</Tag>
+                ) : (
+                  <Tag color="gray">暂无在线上报</Tag>
+                )}
+                <Typography.Text type="secondary">最近验证时间 {formatTime(server.rconVerifiedAt)}</Typography.Text>
+              </Space>
+
+              <Typography.Text type="secondary">{getServerAccessSummary(server)}</Typography.Text>
+            </Space>
+
+            <Space size="small" wrap>
+              <Button size="small" onClick={() => openServerSettingsDrawer(community.id, server)}>
+                服务器设置
+              </Button>
+              <Button size="small" type="outline" onClick={() => { void openPlayerDrawer(community.id, server.id); }}>
+                玩家管理
+              </Button>
+              <Button
+                size="small"
+                type="outline"
+                status="danger"
+                icon={<IconDelete />}
+                onClick={() => handleDeleteServer(community, server)}
+              >
+                删除服务器
+              </Button>
+            </Space>
+          </div>
+        </div>
+      ))}
+    </Space>
+  );
+
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <div className="page-toolbar">
@@ -378,9 +701,23 @@ export const CommunityManagementPage = () => {
               <Card
                 title={community.name}
                 extra={
-                  <Button type="outline" size="small" onClick={() => openServerDrawer(community)}>
-                    添加服务器
-                  </Button>
+                  <Space size="small">
+                    <Button type="outline" size="small" onClick={() => openServerDrawer(community)}>
+                      添加服务器
+                    </Button>
+                    <Button type="outline" size="small" icon={<IconEdit />} onClick={() => openCommunityEditModal(community)}>
+                      编辑社区
+                    </Button>
+                    <Button
+                      type="outline"
+                      size="small"
+                      status="danger"
+                      icon={<IconDelete />}
+                      onClick={() => handleDeleteCommunity(community)}
+                    >
+                      删除社区
+                    </Button>
+                  </Space>
                 }
               >
                 <Space direction="vertical" size="medium" style={{ width: '100%' }}>
@@ -394,43 +731,19 @@ export const CommunityManagementPage = () => {
 
                   {community.servers.length ? (
                     <Space direction="vertical" size="medium" style={{ width: '100%' }}>
-                      {community.servers.map((server) => (
-                        <div className="server-item" key={server.id}>
-                          <div className="server-item-header">
-                            <Space direction="vertical" size="small" style={{ flex: 1 }}>
-                              <Space align="center" size="small" wrap>
-                                <Typography.Text style={{ fontWeight: 600 }}>{server.name}</Typography.Text>
-                                <Tag color="green">RCON 已验证</Tag>
-                                <Tag color={server.whitelistEnabled ? 'green' : 'gray'}>
-                                  白名单{server.whitelistEnabled ? '开启' : '关闭'}
-                                </Tag>
-                                <Tag color={server.entryVerificationEnabled ? 'arcoblue' : 'gray'}>
-                                  进服验证{server.entryVerificationEnabled ? '开启' : '关闭'}
-                                </Tag>
-                              </Space>
+                      {renderServerList(community, community.servers.slice(0, COMMUNITY_SERVER_PREVIEW_COUNT))}
 
-                              <Space size="small" wrap>
-                                <Tag>
-                                  {server.ip}:{server.port}
-                                </Tag>
-                                <Tag color="orange">在线 {server.onlinePlayers.length} 人</Tag>
-                                <Typography.Text type="secondary">最近验证时间 {formatTime(server.rconVerifiedAt)}</Typography.Text>
-                              </Space>
-
-                              <Typography.Text type="secondary">{getServerAccessSummary(server)}</Typography.Text>
-                            </Space>
-
-                            <Space size="small" wrap>
-                              <Button size="small" onClick={() => openServerSettingsDrawer(community.id, server)}>
-                                服务器设置
-                              </Button>
-                              <Button size="small" type="outline" onClick={() => openPlayerDrawer(community.id, server.id)}>
-                                玩家管理
-                              </Button>
-                            </Space>
-                          </div>
+                      {community.servers.length > COMMUNITY_SERVER_PREVIEW_COUNT ? (
+                        <div className="community-server-preview-footer">
+                          <Typography.Text type="secondary">
+                            当前仅预览前 {COMMUNITY_SERVER_PREVIEW_COUNT} 台服务器，另外 {community.servers.length - COMMUNITY_SERVER_PREVIEW_COUNT}
+                            台服务器可在抽屉中查看。
+                          </Typography.Text>
+                          <Button size="small" type="outline" onClick={() => openServerListDrawer(community.id)}>
+                            查看全部服务器
+                          </Button>
                         </div>
-                      ))}
+                      ) : null}
                     </Space>
                   ) : (
                     <Typography.Text type="secondary">当前社区还没有服务器，请先添加并完成 RCON 校验。</Typography.Text>
@@ -441,6 +754,32 @@ export const CommunityManagementPage = () => {
           );
         })}
       </Row>
+
+      <Drawer
+        title={serverListCommunity ? `服务器列表 · ${serverListCommunity.name}` : '服务器列表'}
+        width={720}
+        visible={Boolean(serverListCommunity)}
+        onCancel={closeServerListDrawer}
+      >
+        <Space direction="vertical" size="large" style={{ width: '100%' }}>
+          {serverListCommunity ? (
+            <>
+              <Alert
+                type="info"
+                showIcon
+                content={`当前社区共有 ${serverListCommunity.servers.length} 台服务器，在线玩家 ${serverListCommunity.servers.reduce((count, server) => count + server.onlinePlayers.length, 0)} 人。`}
+              />
+              <Space size="small" wrap>
+                <Tag color="green">服务器 {serverListCommunity.servers.length} 台</Tag>
+                <Tag color="orange">在线玩家 {serverListCommunity.servers.reduce((count, server) => count + server.onlinePlayers.length, 0)} 人</Tag>
+              </Space>
+              <div className="community-server-drawer-list">{renderServerList(serverListCommunity, serverListCommunity.servers)}</div>
+            </>
+          ) : (
+            <Empty description="未找到社区信息" />
+          )}
+        </Space>
+      </Drawer>
 
       <Modal
         title="添加社区"
@@ -460,6 +799,26 @@ export const CommunityManagementPage = () => {
         </Space>
       </Modal>
 
+      <Modal
+        title={editingCommunity ? `编辑社区 · ${editingCommunity.name}` : '编辑社区'}
+        visible={communityEditModalVisible}
+        confirmLoading={submittingCommunityEdit}
+        onOk={() => {
+          void handleUpdateCommunity();
+        }}
+        onCancel={closeCommunityEditModal}
+      >
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Typography.Text>社区名称</Typography.Text>
+          <Input
+            allowClear
+            placeholder="请输入新的社区名称"
+            value={editingCommunityName}
+            onChange={setEditingCommunityName}
+          />
+        </Space>
+      </Modal>
+
       <Drawer
         title={selectedCommunity ? `为 ${selectedCommunity.name} 添加服务器` : '添加服务器'}
         width={460}
@@ -471,10 +830,11 @@ export const CommunityManagementPage = () => {
         onCancel={() => {
           setServerDrawerVisible(false);
           setServerDraft(createEmptyServerDraft());
+          setServerVerification(null);
         }}
       >
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
-          <Alert type="info" showIcon content="添加服务器时可直接设置白名单与进服验证开关，保存前会进行字段校验。" />
+          <Alert type="info" showIcon content="添加服务器时需要先验证当前 IP、端口和 RCON 密码；开启进服验证后还可以设置最低进服 rating 和最低 Steam 等级。" />
 
           <Space direction="vertical" size="small" style={{ width: '100%' }}>
             <Typography.Text>服务器名称</Typography.Text>
@@ -516,6 +876,31 @@ export const CommunityManagementPage = () => {
             />
           </Space>
 
+          <div className="server-setting-row">
+            <Space direction="vertical" size="small" style={{ width: '100%' }}>
+              <Typography.Text style={{ fontWeight: 600 }}>RCON 校验</Typography.Text>
+              <Typography.Text type="secondary">添加前必须验证当前服务器地址与 RCON 密码能够成功连接。</Typography.Text>
+              <Space size="small" wrap>
+                <Tag color={serverDraftVerified ? 'green' : serverDraftVerificationStale ? 'orange' : 'gray'}>
+                  {serverDraftVerified ? '已完成校验' : serverDraftVerificationStale ? '参数已变更，请重新校验' : '尚未校验'}
+                </Tag>
+                {serverDraftVerified && serverVerification ? (
+                  <Tag color="arcoblue">校验时间 {formatTime(serverVerification.verifiedAt)}</Tag>
+                ) : null}
+              </Space>
+            </Space>
+            <Button
+              size="small"
+              type="outline"
+              loading={verifyingServer}
+              onClick={() => {
+                void handleVerifyServerDraft();
+              }}
+            >
+              验证 RCON
+            </Button>
+          </div>
+
           <Divider style={{ margin: 0 }} />
 
           <div className="server-setting-row">
@@ -539,6 +924,29 @@ export const CommunityManagementPage = () => {
               onChange={(checked) => setServerDraft((draft) => ({ ...draft, entryVerificationEnabled: checked }))}
             />
           </div>
+
+          {serverDraft.entryVerificationEnabled ? (
+            <div className="detail-grid">
+              <div className="detail-item">
+                <span className="detail-item-label">最小进服 rating</span>
+                <InputNumber
+                  style={{ width: '100%' }}
+                  min={0}
+                  value={serverDraft.minEntryRating}
+                  onChange={(value) => setServerDraft((draft) => ({ ...draft, minEntryRating: Number(value ?? 0) }))}
+                />
+              </div>
+              <div className="detail-item">
+                <span className="detail-item-label">最小 Steam 等级</span>
+                <InputNumber
+                  style={{ width: '100%' }}
+                  min={0}
+                  value={serverDraft.minSteamLevel}
+                  onChange={(value) => setServerDraft((draft) => ({ ...draft, minSteamLevel: Number(value ?? 0) }))}
+                />
+              </div>
+            </div>
+          ) : null}
         </Space>
       </Drawer>
 
@@ -557,7 +965,7 @@ export const CommunityManagementPage = () => {
         }}
       >
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
-          <Alert type="info" showIcon content="可单独修改服务器 IP、端口、RCON 密码，以及白名单和进服验证开关。" />
+          <Alert type="info" showIcon content="可单独修改服务器 IP、端口、RCON 密码，以及白名单、进服验证和进服验证门槛。" />
 
           {serverSettingsContext ? (
             <Space size="small" wrap>
@@ -621,6 +1029,33 @@ export const CommunityManagementPage = () => {
               onChange={(checked) => setServerSettingsDraft((draft) => ({ ...draft, entryVerificationEnabled: checked }))}
             />
           </div>
+
+          {serverSettingsDraft.entryVerificationEnabled ? (
+            <div className="detail-grid">
+              <div className="detail-item">
+                <span className="detail-item-label">最小进服 rating</span>
+                <InputNumber
+                  style={{ width: '100%' }}
+                  min={0}
+                  value={serverSettingsDraft.minEntryRating}
+                  onChange={(value) =>
+                    setServerSettingsDraft((draft) => ({ ...draft, minEntryRating: Number(value ?? 0) }))
+                  }
+                />
+              </div>
+              <div className="detail-item">
+                <span className="detail-item-label">最小 Steam 等级</span>
+                <InputNumber
+                  style={{ width: '100%' }}
+                  min={0}
+                  value={serverSettingsDraft.minSteamLevel}
+                  onChange={(value) =>
+                    setServerSettingsDraft((draft) => ({ ...draft, minSteamLevel: Number(value ?? 0) }))
+                  }
+                />
+              </div>
+            </div>
+          ) : null}
         </Space>
       </Drawer>
 
@@ -631,20 +1066,37 @@ export const CommunityManagementPage = () => {
         onCancel={() => {
           setPlayerDrawerVisible(false);
           setPlayerDrawerTarget(null);
+          setLoadingPlayerDrawer(false);
         }}
       >
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
           <Alert type="info" showIcon content="踢出和封禁都需要填写理由；封禁默认永久封禁，也可改为按秒设置时长。" />
 
           {playerDrawerContext ? (
-            <Space size="small" wrap>
-              <Tag color="arcoblue">所属社区：{playerDrawerContext.community.name}</Tag>
-              <Tag>
-                服务器地址：{playerDrawerContext.server.ip}:{playerDrawerContext.server.port}
-              </Tag>
-              <Tag color="orange">在线玩家 {playerDrawerContext.server.onlinePlayers.length} 人</Tag>
+            <Space direction="vertical" size="small" style={{ width: '100%' }}>
+              <Space size="small" wrap>
+                <Tag color="arcoblue">所属社区：{playerDrawerContext.community.name}</Tag>
+                <Tag>服务器 ID：{playerDrawerContext.server.id}</Tag>
+                <Tag>
+                  服务器地址：{playerDrawerContext.server.ip}:{playerDrawerContext.server.port}
+                </Tag>
+                <Tag color="orange">在线玩家 {playerDrawerContext.server.onlinePlayers.length} 人</Tag>
+                {playerDrawerContext.server.playerReportedAt ? (
+                  <Tag color="green">最近上报 {formatTime(playerDrawerContext.server.playerReportedAt)}</Tag>
+                ) : (
+                  <Tag color="gray">插件暂未上报在线玩家</Tag>
+                )}
+              </Space>
+              <Space size="small" wrap>
+                <Button size="small" loading={loadingPlayerDrawer} onClick={() => { void handleRefreshPlayerDrawer(); }}>
+                  刷新在线玩家
+                </Button>
+                <Typography.Text type="secondary">该列表来自安装在游戏服上的 SourceMod 1.11 插件实时上报。</Typography.Text>
+              </Space>
             </Space>
           ) : null}
+
+          {loadingPlayerDrawer ? <Alert type="info" showIcon content="正在从后端加载该服务器的实时在线玩家..." /> : null}
 
           {playerDrawerContext?.server.onlinePlayers.length ? (
             <Space direction="vertical" size="medium" style={{ width: '100%' }}>
@@ -654,11 +1106,17 @@ export const CommunityManagementPage = () => {
                     <Space direction="vertical" size="small" style={{ flex: 1 }}>
                       <Space align="center" size="small" wrap>
                         <Typography.Text style={{ fontWeight: 600 }}>{player.nickname}</Typography.Text>
+                        <Tag color="arcoblue">UID {player.userId}</Tag>
                         <Tag>{player.steamId}</Tag>
+                        {player.steamId64 ? <Tag color="purple">{player.steamId64}</Tag> : null}
+                        {player.steamId3 ? <Tag color="cyan">{player.steamId3}</Tag> : null}
                         <Tag>IP {player.ipAddress}</Tag>
                         <Tag color="arcoblue">Ping {player.ping}</Tag>
                       </Space>
-                      <Typography.Text type="secondary">连接时间：{formatTime(player.connectedAt)}</Typography.Text>
+                      <Typography.Text type="secondary">
+                        连接时间：{formatTime(player.connectedAt)}
+                        {player.lastReportedAt ? ` · 最近上报 ${formatTime(player.lastReportedAt)}` : ''}
+                      </Typography.Text>
                     </Space>
 
                     <Space size="small" wrap>
@@ -695,7 +1153,7 @@ export const CommunityManagementPage = () => {
                 </Card>
               ))}
             </Space>
-          ) : (
+          ) : loadingPlayerDrawer ? null : (
             <Empty description="当前服务器没有在线玩家" />
           )}
         </Space>
