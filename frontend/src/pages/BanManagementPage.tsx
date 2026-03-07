@@ -362,28 +362,37 @@ export const BanManagementPage = () => {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <div className="page-toolbar">
-        <div>
-          <Typography.Title heading={4} style={{ marginBottom: 8 }}>
-            封禁管理
-          </Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            统一记录封禁玩家，并支持手动添加、编辑封禁、解除封禁和删除封禁记录。
-          </Typography.Paragraph>
-        </div>
+      <Card className="page-header-card">
+        <Space direction="vertical" size="large" className="page-header-stack">
+          <div className="page-toolbar">
+            <div className="page-toolbar-copy">
+              <Typography.Title className="page-toolbar-title" heading={4}>
+                封禁管理
+              </Typography.Title>
+              <Typography.Paragraph className="page-toolbar-description" type="secondary">
+                统一记录封禁玩家，并支持手动添加、编辑封禁、解除封禁和删除封禁记录。
+              </Typography.Paragraph>
+            </div>
 
-        <Button type="primary" icon={<IconPlus />} onClick={openCreateModal}>
-          手动添加封禁
-        </Button>
-      </div>
+            <div className="page-toolbar-actions">
+              <Tag color="red">生效中 {summary.active}</Tag>
+              <Tag color="gray">已解除 {summary.revoked}</Tag>
+              <Tag color="orange">待回填 {summary.pendingFill}</Tag>
+              <Button type="primary" icon={<IconPlus />} onClick={openCreateModal}>
+                手动添加封禁
+              </Button>
+            </div>
+          </div>
 
-      <Alert
-        type="info"
-        showIcon
-        content={`当前共有 ${summary.total} 条封禁记录，其中生效中 ${summary.active} 条，已解除 ${summary.revoked} 条。当前接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}${bootstrapping ? '，正在加载…' : ''}`}
-      />
+          <Alert
+            type="info"
+            showIcon
+            content={`当前共有 ${summary.total} 条封禁记录，其中生效中 ${summary.active} 条，已解除 ${summary.revoked} 条。当前接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}${bootstrapping ? '，正在加载…' : ''}`}
+          />
 
-      {apiError ? <Alert type="warning" showIcon content={`接口提示：${apiError}`} /> : null}
+          {apiError ? <Alert type="warning" showIcon content={`接口提示：${apiError}`} /> : null}
+        </Space>
+      </Card>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} lg={6}>
@@ -416,34 +425,41 @@ export const BanManagementPage = () => {
         </Col>
       </Row>
 
-      <Card title="筛选条件">
-        <Space wrap>
-          <Select value={banTypeFilter} style={{ width: 180 }} onChange={(value) => setBanTypeFilter(value)}>
-            <Option value="all">全部封禁属性</Option>
-            <Option value="steam_account">Steam账号封禁</Option>
-            <Option value="ip">IP封禁</Option>
-          </Select>
-          <Select value={statusFilter} style={{ width: 160 }} onChange={(value) => setStatusFilter(value)}>
-            <Option value="all">全部状态</Option>
-            <Option value="active">生效中</Option>
-            <Option value="revoked">已解除</Option>
-          </Select>
-          <Select value={sourceFilter} style={{ width: 180 }} onChange={(value) => setSourceFilter(value)}>
-            <Option value="all">全部来源</Option>
-            <Option value="server_action">服务器内封禁</Option>
-            <Option value="manual">管理员手动添加</Option>
-          </Select>
-          <Input.Search
-            allowClear
-            style={{ width: 360 }}
-            placeholder="搜索玩家、Steam 标识、IP、封禁原因、服务器或管理员"
-            value={keyword}
-            onChange={setKeyword}
-          />
+      <Card className="section-card" title="筛选条件">
+        <Space direction="vertical" size="medium" style={{ width: '100%' }}>
+          <Typography.Text type="secondary">可按封禁属性、状态、来源以及关键词快速筛选记录。</Typography.Text>
+          <div className="page-toolbar">
+            <Space wrap className="toolbar-action-group">
+              <Select value={banTypeFilter} style={{ width: 180 }} onChange={(value) => setBanTypeFilter(value)}>
+                <Option value="all">全部封禁属性</Option>
+                <Option value="steam_account">Steam账号封禁</Option>
+                <Option value="ip">IP封禁</Option>
+              </Select>
+              <Select value={statusFilter} style={{ width: 160 }} onChange={(value) => setStatusFilter(value)}>
+                <Option value="all">全部状态</Option>
+                <Option value="active">生效中</Option>
+                <Option value="revoked">已解除</Option>
+              </Select>
+              <Select value={sourceFilter} style={{ width: 180 }} onChange={(value) => setSourceFilter(value)}>
+                <Option value="all">全部来源</Option>
+                <Option value="server_action">服务器内封禁</Option>
+                <Option value="manual">管理员手动添加</Option>
+              </Select>
+            </Space>
+            <div className="toolbar-search-group">
+              <Input.Search
+                className="toolbar-search-input"
+                allowClear
+                placeholder="搜索玩家、Steam 标识、IP、封禁原因、服务器或管理员"
+                value={keyword}
+                onChange={setKeyword}
+              />
+            </div>
+          </div>
         </Space>
       </Card>
 
-      <Card title="封禁列表">
+      <Card className="table-card" title="封禁列表" extra={<Tag color="arcoblue">当前 {filteredBans.length} 条</Tag>}>
         <Table rowKey="id" columns={columns} data={filteredBans} pagination={{ pageSize: 8 }} />
       </Card>
 

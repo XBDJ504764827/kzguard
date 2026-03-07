@@ -167,32 +167,52 @@ export const UsersPlaceholderPage = () => {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <div>
-        <Typography.Title heading={4} style={{ marginBottom: 8 }}>
-          网站用户
-        </Typography.Title>
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          系统管理员现在可以新增网站管理员账号；新建账号提交成功后即可使用对应用户名和密码登录、退出管理后台。
-        </Typography.Paragraph>
-      </div>
+      <Card className="page-header-card">
+        <Space direction="vertical" size="large" className="page-header-stack">
+          <div className="page-toolbar">
+            <div className="page-toolbar-copy">
+              <Typography.Title className="page-toolbar-title" heading={4}>
+                网站用户
+              </Typography.Title>
+              <Typography.Paragraph className="page-toolbar-description" type="secondary">
+                系统管理员现在可以新增网站管理员账号；新建账号提交成功后即可使用对应用户名和密码登录、退出管理后台。
+              </Typography.Paragraph>
+            </div>
 
-      <Alert
-        type="info"
-        showIcon
-        content={`当前管理员资料与权限来自 Rust 后端真实数据。当前接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}。`}
-      />
+            <div className="page-toolbar-actions">
+              {currentAdmin ? (
+                <Tag color={websiteAdminRoleColorMap[currentAdmin.role]}>
+                  当前角色：{websiteAdminRoleLabelMap[currentAdmin.role]}
+                </Tag>
+              ) : null}
+              <Tag color="arcoblue">管理员 {websiteUsers.length}</Tag>
+              {isSystemAdmin ? (
+                <Button type="primary" icon={<IconPlus />} onClick={openCreateModal}>
+                  新增管理员
+                </Button>
+              ) : null}
+            </div>
+          </div>
 
-      {!isSystemAdmin ? (
-        <Alert
-          type="warning"
-          showIcon
-          content="当前以普通管理员身份查看页面：其他管理员管理能力和系统管理员专属功能已隐藏。"
-        />
-      ) : null}
+          <Alert
+            type="info"
+            showIcon
+            content={`当前管理员资料与权限来自 Rust 后端真实数据。当前接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}。`}
+          />
+
+          {!isSystemAdmin ? (
+            <Alert
+              type="warning"
+              showIcon
+              content="当前以普通管理员身份查看页面：其他管理员管理能力和系统管理员专属功能已隐藏。"
+            />
+          ) : null}
+        </Space>
+      </Card>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
-          <Card title="当前登录账号">
+          <Card className="section-card" title="当前登录账号">
             {currentAdmin ? (
               <Space direction="vertical" size="medium" style={{ width: '100%' }}>
                 <Space size="small" wrap>
@@ -212,7 +232,7 @@ export const UsersPlaceholderPage = () => {
         </Col>
 
         <Col xs={24} lg={12}>
-          <Card title="当前账号权限">
+          <Card className="section-card" title="当前账号权限">
             <List
               dataSource={permissionSummary}
               render={(item, index) => (
@@ -230,12 +250,9 @@ export const UsersPlaceholderPage = () => {
 
       {isSystemAdmin ? (
         <Card
+          className="table-card"
           title="管理员列表"
-          extra={
-            <Button type="primary" icon={<IconPlus />} onClick={openCreateModal}>
-              新增管理员
-            </Button>
-          }
+          extra={<Tag color="arcoblue">共 {websiteUsers.length} 位管理员</Tag>}
         >
           <Table rowKey="id" columns={columns} data={websiteUsers} pagination={false} />
         </Card>
@@ -244,6 +261,7 @@ export const UsersPlaceholderPage = () => {
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
           <Card
+            className="section-card"
             title="我的信息"
             extra={
               currentAdminRecord ? (
@@ -275,7 +293,7 @@ export const UsersPlaceholderPage = () => {
 
         <Col xs={24} lg={12}>
           {isSystemAdmin ? (
-            <Card title="系统管理员专属功能（待开发）">
+            <Card className="section-card" title="系统管理员专属功能（待开发）">
               <List
                 dataSource={systemAdminOnlyFeatures}
                 render={(item, index) => (
@@ -289,7 +307,7 @@ export const UsersPlaceholderPage = () => {
               />
             </Card>
           ) : (
-            <Card title="普通管理员说明">
+            <Card className="section-card" title="普通管理员说明">
               <Space direction="vertical" size="medium">
                 <Typography.Text>
                   普通管理员当前仅开放个人资料维护能力，系统管理员专属区和后续系统级功能不会显示在当前视图中。

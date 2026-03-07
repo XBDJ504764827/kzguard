@@ -222,33 +222,40 @@ export const WhitelistManagementPage = () => {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <div className="page-toolbar">
-        <div>
-          <Typography.Title heading={4} style={{ marginBottom: 8 }}>
-            白名单管理
-          </Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            审核通过的玩家才允许进入服务器；待审核与已拒绝玩家会保留完整记录，方便管理员追踪。
-          </Typography.Paragraph>
-        </div>
+      <Card className="page-header-card">
+        <Space direction="vertical" size="large" className="page-header-stack">
+          <div className="page-toolbar">
+            <div className="page-toolbar-copy">
+              <Typography.Title className="page-toolbar-title" heading={4}>
+                白名单管理
+              </Typography.Title>
+              <Typography.Paragraph className="page-toolbar-description" type="secondary">
+                审核通过的玩家才允许进入服务器；待审核与已拒绝玩家会保留完整记录，方便管理员追踪。
+              </Typography.Paragraph>
+            </div>
 
-        <Space>
-          <Button onClick={() => setApplicationModalVisible(true)}>模拟玩家申请</Button>
-          <Button type="primary" icon={<IconPlus />} onClick={() => setManualModalVisible(true)}>
-            管理员手动添加
-          </Button>
+            <div className="page-toolbar-actions">
+              <Tag color="green">已通过 {groupedPlayers.approved.length}</Tag>
+              <Tag color="orange">待审核 {groupedPlayers.pending.length}</Tag>
+              <Tag color="red">已拒绝 {groupedPlayers.rejected.length}</Tag>
+              <Button onClick={() => setApplicationModalVisible(true)}>模拟玩家申请</Button>
+              <Button type="primary" icon={<IconPlus />} onClick={() => setManualModalVisible(true)}>
+                管理员手动添加
+              </Button>
+            </div>
+          </div>
+
+          <Alert
+            type="info"
+            showIcon
+            content={`当前白名单流程接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}${bootstrapping ? '，正在加载…' : ''}`}
+          />
+
+          {apiError ? <Alert type="warning" showIcon content={`接口提示：${apiError}`} /> : null}
         </Space>
-      </div>
+      </Card>
 
-      <Alert
-        type="info"
-        showIcon
-        content={`当前白名单流程接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}${bootstrapping ? '，正在加载…' : ''}`}
-      />
-
-      {apiError ? <Alert type="warning" showIcon content={`接口提示：${apiError}`} /> : null}
-
-      <Card>
+      <Card className="table-card">
         <Tabs activeTab={activeTab} onChange={(value) => setActiveTab(value as WhitelistStatus)}>
           <TabPane key="approved" title={`已通过 (${groupedPlayers.approved.length})`}>
             <Table rowKey="id" columns={columns} data={groupedPlayers.approved} pagination={false} />

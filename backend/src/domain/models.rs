@@ -88,6 +88,20 @@ pub(crate) struct WhitelistPlayer {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct WhitelistApplicationHistory {
+    pub(crate) steam_id64: String,
+    pub(crate) steam_id: String,
+    pub(crate) steam_id3: String,
+    pub(crate) duplicate_blocked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) block_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) history_hint: Option<String>,
+    pub(crate) records: Vec<WhitelistPlayer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct BanRecord {
     pub(crate) id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -179,6 +193,16 @@ pub(crate) struct ResolvedSteamIdentifiers {
     pub(crate) steam_id64: String,
     pub(crate) steam_id: String,
     pub(crate) steam_id3: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResolvedSteamProfile {
+    pub(crate) nickname: String,
+    pub(crate) steam_id64: String,
+    pub(crate) steam_id: String,
+    pub(crate) steam_id3: String,
+    pub(crate) profile_url: String,
 }
 
 #[derive(Debug, Deserialize)]

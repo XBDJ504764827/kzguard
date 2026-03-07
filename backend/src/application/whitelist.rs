@@ -3,14 +3,22 @@ use crate::{
         admins::get_operator_snapshot, mappers::map_whitelist_player,
         operation_logs::append_operation_log,
     },
-    domain::{db::DbWhitelistPlayer, models::WhitelistPlayer},
+    domain::{
+        db::DbWhitelistPlayer,
+        models::{
+            ResolvedSteamIdentifiers, WhitelistApplicationHistory, WhitelistPlayer,
+        },
+    },
     error::{AppError, AppResult},
-    http::requests::{ApplicationDraft, ManualWhitelistDraft},
+    http::requests::{ApplicationDraft, ManualWhitelistDraft, PublicWhitelistApplicationDraft},
     support::{
         convert::trim_to_none,
         ids::prefixed_id,
+        steam::{resolve_steam_identifiers_strict, resolve_steam_profile, steam_vanity_regex},
         time::{iso_to_mysql, now_iso},
-        validation::{validate_application_draft, validate_manual_whitelist_draft},
+        validation::{
+            require_non_empty, validate_application_draft, validate_manual_whitelist_draft,
+        },
     },
 };
 use axum::http::StatusCode;
@@ -38,6 +46,31 @@ pub(crate) async fn list_whitelist(
     Ok(rows.into_iter().map(map_whitelist_player).collect())
 }
 
+pub(crate) async fn list_public_whitelist(
+    pool: &MySqlPool,
+    status: Option<String>,
+    search: Option<String>,
+) -> AppResult<Vec<WhitelistPlayer>> {
+    let normalized_status = normalize_whitelist_status_filter(status)?;
+    let normalized_search = trim_to_none(search);
+    let players = list_whitelist(pool, normalized_status).await?;
+
+    Ok(players
+        .into_iter()
+        .filter(|player| matches_whitelist_search(player, normalized_search.as_deref()))
+        .collect())
+}
+
+pub(crate) async fn get_public_whitelist_history(
+    pool: &MySqlPool,
+    identifier: &str,
+) -> AppResult<WhitelistApplicationHistory> {
+    require_non_empty(identifier, "请输入玩家 Steam 标识")?;
+
+    let identifiers = resolve_history_identifiers(identifier).await?;
+    build_whitelist_application_history(pool, identifiers).await
+}
+
 pub(crate) async fn create_application(
     pool: &MySqlPool,
     draft: ApplicationDraft,
@@ -56,24 +89,56 @@ pub(crate) async fn create_application(
         reviewed_at: None,
     };
 
-    sqlx::query(
-        r#"
-        INSERT INTO whitelist_players (
-          id, nickname, steam_id, contact, note, status, source, applied_at, reviewed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        "#,
+    insert_whitelist_player(pool, &player).await?;
+
+    Ok(player)
+}
+
+pub(crate) async fn create_public_application(
+    pool: &MySqlPool,
+    draft: PublicWhitelistApplicationDraft,
+) -> AppResult<WhitelistPlayer> {
+    require_non_empty(&draft.steam_identifier, "请输入玩家 Steam 标识")?;
+
+    let resolved_profile = resolve_steam_profile(&draft.steam_identifier).await?;
+    let history = build_whitelist_application_history(
+        pool,
+        ResolvedSteamIdentifiers {
+            steam_id64: resolved_profile.steam_id64.clone(),
+            steam_id: resolved_profile.steam_id.clone(),
+            steam_id3: resolved_profile.steam_id3.clone(),
+        },
     )
-    .bind(&player.id)
-    .bind(&player.nickname)
-    .bind(&player.steam_id)
-    .bind(&player.contact)
-    .bind(&player.note)
-    .bind(&player.status)
-    .bind(&player.source)
-    .bind(iso_to_mysql(&player.applied_at))
-    .bind(Option::<String>::None)
-    .execute(pool)
     .await?;
+
+    if history.duplicate_blocked {
+        return Err(AppError::http(
+            StatusCode::BAD_REQUEST,
+            history
+                .block_reason
+                .unwrap_or_else(|| "该 Steam 账号暂不允许重复提交白名单申请".to_string()),
+        ));
+    }
+
+    let nickname = trim_to_none(draft.nickname)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| resolved_profile.nickname.clone());
+
+    require_non_empty(&nickname, "请输入游戏名称")?;
+
+    let player = WhitelistPlayer {
+        id: prefixed_id("player"),
+        nickname,
+        steam_id: resolved_profile.steam_id,
+        contact: trim_to_none(draft.contact),
+        note: trim_to_none(draft.note),
+        status: "pending".to_string(),
+        source: "application".to_string(),
+        applied_at: now_iso(),
+        reviewed_at: None,
+    };
+
+    insert_whitelist_player(pool, &player).await?;
 
     Ok(player)
 }
@@ -98,24 +163,7 @@ pub(crate) async fn create_manual_whitelist_entry(
         reviewed_at: Some(now),
     };
 
-    sqlx::query(
-        r#"
-        INSERT INTO whitelist_players (
-          id, nickname, steam_id, contact, note, status, source, applied_at, reviewed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        "#,
-    )
-    .bind(&player.id)
-    .bind(&player.nickname)
-    .bind(&player.steam_id)
-    .bind(&player.contact)
-    .bind(&player.note)
-    .bind(&player.status)
-    .bind(&player.source)
-    .bind(iso_to_mysql(&player.applied_at))
-    .bind(player.reviewed_at.as_ref().map(|value| iso_to_mysql(value)))
-    .execute(pool)
-    .await?;
+    insert_whitelist_player(pool, &player).await?;
 
     let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
     append_operation_log(
@@ -214,4 +262,152 @@ pub(crate) fn note_was_provided(
         (Some(_), None) => true,
         _ => false,
     }
+}
+
+async fn insert_whitelist_player(pool: &MySqlPool, player: &WhitelistPlayer) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO whitelist_players (
+          id, nickname, steam_id, contact, note, status, source, applied_at, reviewed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(&player.id)
+    .bind(&player.nickname)
+    .bind(&player.steam_id)
+    .bind(&player.contact)
+    .bind(&player.note)
+    .bind(&player.status)
+    .bind(&player.source)
+    .bind(iso_to_mysql(&player.applied_at))
+    .bind(player.reviewed_at.as_ref().map(|value| iso_to_mysql(value)))
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+async fn build_whitelist_application_history(
+    pool: &MySqlPool,
+    identifiers: ResolvedSteamIdentifiers,
+) -> AppResult<WhitelistApplicationHistory> {
+    let records = list_whitelist(pool, None)
+        .await?
+        .into_iter()
+        .filter(|player| matches_whitelist_identity_exact(player, &identifiers))
+        .collect::<Vec<_>>();
+    let (duplicate_blocked, block_reason, history_hint) = summarize_whitelist_history(&records);
+
+    Ok(WhitelistApplicationHistory {
+        steam_id64: identifiers.steam_id64,
+        steam_id: identifiers.steam_id,
+        steam_id3: identifiers.steam_id3,
+        duplicate_blocked,
+        block_reason,
+        history_hint,
+        records,
+    })
+}
+
+async fn resolve_history_identifiers(identifier: &str) -> AppResult<ResolvedSteamIdentifiers> {
+    if steam_vanity_regex().is_match(identifier.trim()) {
+        let profile = resolve_steam_profile(identifier).await?;
+        return Ok(ResolvedSteamIdentifiers {
+            steam_id64: profile.steam_id64,
+            steam_id: profile.steam_id,
+            steam_id3: profile.steam_id3,
+        });
+    }
+
+    resolve_steam_identifiers_strict(identifier)
+}
+
+fn normalize_whitelist_status_filter(status: Option<String>) -> AppResult<Option<String>> {
+    match trim_to_none(status).as_deref() {
+        None | Some("all") => Ok(None),
+        Some("approved") => Ok(Some("approved".to_string())),
+        Some("pending") => Ok(Some("pending".to_string())),
+        Some("rejected") => Ok(Some("rejected".to_string())),
+        Some(_) => Err(AppError::http(
+            StatusCode::BAD_REQUEST,
+            "白名单状态仅支持 approved、pending、rejected 或 all",
+        )),
+    }
+}
+
+fn matches_whitelist_search(player: &WhitelistPlayer, search: Option<&str>) -> bool {
+    let Some(search) = search.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+
+    let normalized_search = search.to_lowercase();
+    if player.nickname.to_lowercase().contains(&normalized_search)
+        || player.steam_id.to_lowercase().contains(&normalized_search)
+    {
+        return true;
+    }
+
+    if let Ok(search_identifiers) = resolve_steam_identifiers_strict(search) {
+        if player.steam_id.eq_ignore_ascii_case(&search_identifiers.steam_id) {
+            return true;
+        }
+
+        if let Ok(player_identifiers) = resolve_steam_identifiers_strict(&player.steam_id) {
+            return player_identifiers.steam_id64 == search_identifiers.steam_id64
+                || player_identifiers.steam_id == search_identifiers.steam_id
+                || player_identifiers.steam_id3 == search_identifiers.steam_id3;
+        }
+    }
+
+    false
+}
+
+fn matches_whitelist_identity_exact(
+    player: &WhitelistPlayer,
+    identifiers: &ResolvedSteamIdentifiers,
+) -> bool {
+    if player.steam_id.eq_ignore_ascii_case(&identifiers.steam_id) {
+        return true;
+    }
+
+    if let Ok(player_identifiers) = resolve_steam_identifiers_strict(&player.steam_id) {
+        return player_identifiers.steam_id64 == identifiers.steam_id64
+            || player_identifiers.steam_id == identifiers.steam_id
+            || player_identifiers.steam_id3 == identifiers.steam_id3;
+    }
+
+    false
+}
+
+fn summarize_whitelist_history(
+    records: &[WhitelistPlayer],
+) -> (bool, Option<String>, Option<String>) {
+    if records.iter().any(|record| record.status == "approved") {
+        return (
+            true,
+            Some("该 Steam 账号已在白名单中，无需重复申请".to_string()),
+            None,
+        );
+    }
+
+    if records.iter().any(|record| record.status == "pending") {
+        return (
+            true,
+            Some("该 Steam 账号已有待审核申请，请勿重复提交".to_string()),
+            None,
+        );
+    }
+
+    if records.iter().any(|record| record.status == "rejected") {
+        return (
+            false,
+            None,
+            Some(
+                "检测到该 Steam 账号的历史申请记录，当前可重新提交，建议在申请说明中补充变更情况。"
+                    .to_string(),
+            ),
+        );
+    }
+
+    (false, None, None)
 }

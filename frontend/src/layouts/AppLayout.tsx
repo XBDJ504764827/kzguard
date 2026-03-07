@@ -1,13 +1,4 @@
-import {
-  Avatar,
-  Button,
-  Layout,
-  Menu,
-  Space,
-  Switch,
-  Tag,
-  Typography,
-} from '@arco-design/web-react';
+import { Avatar, Button, Layout, Menu, Switch, Tag, Typography } from '@arco-design/web-react';
 import {
   IconApps,
   IconBulb,
@@ -82,54 +73,62 @@ export const AppLayout = () => {
 
       <Layout>
         <Layout.Header className="app-header">
-          <Space size="medium">
+          <div className="app-header-main">
             <Button
               type="text"
               icon={collapsed ? <IconMenuUnfold /> : <IconMenuFold />}
               onClick={() => setCollapsed((currentValue) => !currentValue)}
             />
-            <Space size="small" wrap>
-              <Typography.Title heading={5} style={{ marginBottom: 0 }}>
+
+            <div className="app-header-title-group">
+              <Typography.Title heading={5} className="app-header-title">
                 KZ Guard 管理台
               </Typography.Title>
-              <Tag color="green">Rust 后端</Tag>
-              <Tag color={apiMode === 'http' ? 'green' : 'orange'}>{apiMode === 'http' ? 'HTTP API' : 'Mock API'}</Tag>
-            </Space>
-          </Space>
+              <div className="app-header-meta">
+                <Tag color="green">Rust 后端</Tag>
+                <Tag color={apiMode === 'http' ? 'green' : 'orange'}>{apiMode === 'http' ? 'HTTP API' : 'Mock API'}</Tag>
+              </div>
+            </div>
+          </div>
 
-          <Space size="medium" wrap>
+          <div className="app-header-actions">
             {currentAdmin ? (
-              <Space size="small" className="header-user-chip">
+              <div className="header-user-chip">
                 <Tag color={websiteAdminRoleColorMap[currentAdmin.role]}>
                   {websiteAdminRoleLabelMap[currentAdmin.role]}
                 </Tag>
-                <Typography.Text>{currentAdmin.displayName}</Typography.Text>
-              </Space>
+                <Typography.Text ellipsis className="header-user-name">
+                  {currentAdmin.displayName}
+                </Typography.Text>
+              </div>
             ) : null}
-            <Space size="small">
-              <IconBulb />
-              <Typography.Text>{theme === 'dark' ? '深色模式' : '浅色模式'}</Typography.Text>
-            </Space>
-            <Switch
-              checked={theme === 'dark'}
-              checkedText="Dark"
-              uncheckedText="Light"
-              onChange={(checked) => setTheme(checked ? 'dark' : 'light')}
-            />
-            <Button
-              type="outline"
-              size="small"
-              icon={<IconPoweroff />}
-              onClick={() => {
-                void logout();
-              }}
-            >
-              退出登录
-            </Button>
-            <Avatar style={{ backgroundColor: '#165dff' }}>
-              {currentAdmin?.displayName.slice(0, 1) ?? 'K'}
-            </Avatar>
-          </Space>
+
+            <div className="app-header-control-row">
+              <div className="header-theme-chip">
+                <IconBulb />
+                <Typography.Text>{theme === 'dark' ? '深色模式' : '浅色模式'}</Typography.Text>
+              </div>
+              <Switch
+                checked={theme === 'dark'}
+                checkedText="Dark"
+                uncheckedText="Light"
+                onChange={(checked) => setTheme(checked ? 'dark' : 'light')}
+              />
+              <Button
+                type="outline"
+                size="small"
+                icon={<IconPoweroff />}
+                onClick={() => {
+                  void logout();
+                }}
+              >
+                退出登录
+              </Button>
+              <Avatar style={{ backgroundColor: '#165dff', flexShrink: 0 }}>
+                {currentAdmin?.displayName.slice(0, 1) ?? 'K'}
+              </Avatar>
+            </div>
+          </div>
         </Layout.Header>
 
         <Layout.Content className="content-shell">

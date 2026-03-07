@@ -20,9 +20,7 @@ export const OverviewPage = () => {
     const approvedCount = state.whitelist.filter((player) => player.status === 'approved').length;
     const pendingCount = state.whitelist.filter((player) => player.status === 'pending').length;
     const rejectedCount = state.whitelist.filter((player) => player.status === 'rejected').length;
-    const approvalRate = state.whitelist.length
-      ? Math.round((approvedCount / state.whitelist.length) * 100)
-      : 0;
+    const approvalRate = state.whitelist.length ? Math.round((approvedCount / state.whitelist.length) * 100) : 0;
 
     return {
       serverCount,
@@ -35,22 +33,28 @@ export const OverviewPage = () => {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <div>
-        <Typography.Title heading={4} style={{ marginBottom: 8 }}>
-          管理台概览
-        </Typography.Title>
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          当前版本聚焦社区组管理、白名单流程和接口层拆分，后端与前端可按环境切换为联调模式。
-        </Typography.Paragraph>
-      </div>
+      <Card className="page-header-card">
+        <Space direction="vertical" size="large" className="page-header-stack">
+          <div className="page-toolbar">
+            <div className="page-toolbar-copy">
+              <Typography.Title className="page-toolbar-title" heading={4}>
+                管理台概览
+              </Typography.Title>
+              <Typography.Paragraph className="page-toolbar-description" type="secondary">
+                当前版本聚焦社区组管理、白名单流程和接口层拆分，后端与前端可按环境切换为联调模式。
+              </Typography.Paragraph>
+            </div>
+          </div>
 
-      <Alert
-        type="info"
-        showIcon
-        content={`当前接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}${bootstrapping ? '，正在加载数据…' : ''}`}
-      />
+          <Alert
+            type="info"
+            showIcon
+            content={`当前接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}${bootstrapping ? '，正在加载数据…' : ''}`}
+          />
 
-      {apiError ? <Alert type="warning" showIcon content={`接口提示：${apiError}`} /> : null}
+          {apiError ? <Alert type="warning" showIcon content={`接口提示：${apiError}`} /> : null}
+        </Space>
+      </Card>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} lg={6}>
@@ -85,7 +89,7 @@ export const OverviewPage = () => {
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={14}>
-          <Card title="社区与服务器速览">
+          <Card className="section-card" title="社区与服务器速览">
             <List
               dataSource={state.communities}
               render={(community) => (
@@ -109,7 +113,7 @@ export const OverviewPage = () => {
         </Col>
 
         <Col xs={24} lg={10}>
-          <Card title="白名单状态分布">
+          <Card className="section-card" title="白名单状态分布">
             <Space direction="vertical" size="large" style={{ width: '100%' }}>
               <div className="status-row">
                 <div>

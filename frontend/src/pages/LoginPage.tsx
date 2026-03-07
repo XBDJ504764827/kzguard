@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Input, Message, Space, Typography } from '@arco-design/web-react';
+import { Alert, Button, Card, Divider, Input, Message, Space, Typography } from '@arco-design/web-react';
 import { IconLock, IconUser } from '@arco-design/web-react/icon';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -34,10 +34,10 @@ export const LoginPage = () => {
         alignItems: 'center',
         justifyContent: 'center',
         padding: 24,
-        background: 'var(--color-bg-1)',
+        background: 'var(--kz-bg)',
       }}
     >
-      <Card style={{ width: '100%', maxWidth: 440 }}>
+      <Card className="section-card" style={{ width: '100%', maxWidth: 480 }}>
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
           <div>
             <Typography.Title heading={3} style={{ marginBottom: 8 }}>
@@ -89,6 +89,23 @@ export const LoginPage = () => {
             >
               登录管理台
             </Button>
+          </Space>
+
+          <Divider style={{ margin: 0 }} />
+
+          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+            <Typography.Text type="secondary">玩家无需登录可直接访问：</Typography.Text>
+            <Space wrap>
+              <Button type="outline" onClick={() => navigate('/public/whitelist/apply')}>
+                白名单申请
+              </Button>
+              <Button type="outline" onClick={() => navigate('/public/whitelist')}>
+                白名单公示
+              </Button>
+              <Button type="outline" onClick={() => navigate('/public/bans')}>
+                封禁公示
+              </Button>
+            </Space>
           </Space>
         </Space>
       </Card>

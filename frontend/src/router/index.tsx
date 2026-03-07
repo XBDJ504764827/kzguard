@@ -2,11 +2,15 @@ import { Spin } from '@arco-design/web-react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAppStore } from '../contexts/AppStoreContext';
 import { AppLayout } from '../layouts/AppLayout';
+import { PublicLayout } from '../layouts/PublicLayout';
 import { BanManagementPage } from '../pages/BanManagementPage';
 import { CommunityManagementPage } from '../pages/CommunityManagementPage';
 import { LoginPage } from '../pages/LoginPage';
 import { OperationLogsPage } from '../pages/OperationLogsPage';
 import { OverviewPage } from '../pages/OverviewPage';
+import { PublicBanNoticePage } from '../pages/PublicBanNoticePage';
+import { PublicWhitelistApplyPage } from '../pages/PublicWhitelistApplyPage';
+import { PublicWhitelistNoticePage } from '../pages/PublicWhitelistNoticePage';
 import { UsersPlaceholderPage } from '../pages/UsersPlaceholderPage';
 import { WhitelistManagementPage } from '../pages/WhitelistManagementPage';
 
@@ -55,6 +59,11 @@ export const AppRouter = () => {
   return (
     <Routes>
       <Route path="/login" element={<LoginRoute />} />
+      <Route element={<PublicLayout />}>
+        <Route path="/public/whitelist/apply" element={<PublicWhitelistApplyPage />} />
+        <Route path="/public/whitelist" element={<PublicWhitelistNoticePage />} />
+        <Route path="/public/bans" element={<PublicBanNoticePage />} />
+      </Route>
       <Route element={<ProtectedLayout />}>
         <Route path="/" element={<OverviewPage />} />
         <Route path="/communities" element={<CommunityManagementPage />} />
@@ -63,7 +72,7 @@ export const AppRouter = () => {
         <Route path="/users" element={<UsersPlaceholderPage />} />
         <Route path="/operation-logs" element={<OperationLogsPage />} />
       </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
   );
 };

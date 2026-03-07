@@ -75,20 +75,32 @@ export const OperationLogsPage = () => {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <div>
-        <Typography.Title heading={4} style={{ marginBottom: 8 }}>
-          操作日志
-        </Typography.Title>
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          记录系统管理员和普通管理员在网站中的关键操作，包括操作时间、操作人、操作动作和详细信息。日志为只追加记录，不提供任何编辑或删除能力。
-        </Typography.Paragraph>
-      </div>
+      <Card className="page-header-card">
+        <Space direction="vertical" size="large" className="page-header-stack">
+          <div className="page-toolbar">
+            <div className="page-toolbar-copy">
+              <Typography.Title className="page-toolbar-title" heading={4}>
+                操作日志
+              </Typography.Title>
+              <Typography.Paragraph className="page-toolbar-description" type="secondary">
+                记录系统管理员和普通管理员在网站中的关键操作，包括操作时间、操作人、操作动作和详细信息。日志为只追加记录，不提供任何编辑或删除能力。
+              </Typography.Paragraph>
+            </div>
 
-      <Alert
-        type="info"
-        showIcon
-        content="操作日志为只读历史记录。当前前端原型中，任何管理员都无法修改或删除这些日志。"
-      />
+            <div className="page-toolbar-actions">
+              <Tag color="arcoblue">全部 {operationLogs.length}</Tag>
+              <Tag color="green">系统管理员 {operationLogs.filter((log) => log.operatorRole === 'system_admin').length}</Tag>
+              <Tag color="orange">普通管理员 {operationLogs.filter((log) => log.operatorRole === 'normal_admin').length}</Tag>
+            </div>
+          </div>
+
+          <Alert
+            type="info"
+            showIcon
+            content="操作日志为只读历史记录。当前前端原型中，任何管理员都无法修改或删除这些日志。"
+          />
+        </Space>
+      </Card>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} md={8}>
@@ -118,24 +130,28 @@ export const OperationLogsPage = () => {
         </Col>
       </Row>
 
-      <Card title="日志筛选">
-        <Space wrap>
-          <Select value={roleFilter} style={{ width: 180 }} onChange={(value) => setRoleFilter(value)}>
-            <Option value="all">全部角色</Option>
-            <Option value="system_admin">系统管理员</Option>
-            <Option value="normal_admin">普通管理员</Option>
-          </Select>
-          <Input.Search
-            allowClear
-            style={{ width: 320 }}
-            placeholder="搜索操作人、动作或详细信息"
-            value={keyword}
-            onChange={setKeyword}
-          />
-        </Space>
+      <Card className="section-card" title="日志筛选">
+        <div className="page-toolbar">
+          <Space wrap className="toolbar-action-group">
+            <Select value={roleFilter} style={{ width: 180 }} onChange={(value) => setRoleFilter(value)}>
+              <Option value="all">全部角色</Option>
+              <Option value="system_admin">系统管理员</Option>
+              <Option value="normal_admin">普通管理员</Option>
+            </Select>
+          </Space>
+          <div className="toolbar-search-group">
+            <Input.Search
+              className="toolbar-search-input"
+              allowClear
+              placeholder="搜索操作人、动作或详细信息"
+              value={keyword}
+              onChange={setKeyword}
+            />
+          </div>
+        </div>
       </Card>
 
-      <Card title="日志列表">
+      <Card className="table-card" title="日志列表" extra={<Tag color="arcoblue">当前 {filteredLogs.length} 条</Tag>}>
         <Table rowKey="id" columns={columns} data={filteredLogs} pagination={{ pageSize: 8 }} />
       </Card>
     </Space>

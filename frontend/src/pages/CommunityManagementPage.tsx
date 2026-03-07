@@ -669,28 +669,37 @@ export const CommunityManagementPage = () => {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <div className="page-toolbar">
-        <div>
-          <Typography.Title heading={4} style={{ marginBottom: 8 }}>
-            社区组管理
-          </Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            网站管理员可按服务器单独维护连接参数、白名单与进服验证开关，并直接对在线玩家执行封禁或踢出操作。
-          </Typography.Paragraph>
-        </div>
+      <Card className="page-header-card">
+        <Space direction="vertical" size="large" className="page-header-stack">
+          <div className="page-toolbar">
+            <div className="page-toolbar-copy">
+              <Typography.Title className="page-toolbar-title" heading={4}>
+                社区组管理
+              </Typography.Title>
+              <Typography.Paragraph className="page-toolbar-description" type="secondary">
+                网站管理员可按服务器单独维护连接参数、白名单与进服验证开关，并直接对在线玩家执行封禁或踢出操作。
+              </Typography.Paragraph>
+            </div>
 
-        <Button type="primary" icon={<IconPlus />} loading={submittingCommunity} onClick={() => setCommunityModalVisible(true)}>
-          添加社区
-        </Button>
-      </div>
+            <div className="page-toolbar-actions">
+              <Tag color="arcoblue">社区 {state.communities.length}</Tag>
+              <Tag color="green">服务器 {totalServerCount}</Tag>
+              <Tag color="orange">在线玩家 {totalOnlinePlayerCount}</Tag>
+              <Button type="primary" icon={<IconPlus />} loading={submittingCommunity} onClick={() => setCommunityModalVisible(true)}>
+                添加社区
+              </Button>
+            </div>
+          </div>
 
-      <Alert
-        type="info"
-        showIcon
-        content={`当前共有 ${state.communities.length} 个社区，已接入 ${totalServerCount} 台服务器，在线玩家 ${totalOnlinePlayerCount} 人。当前接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}${bootstrapping ? '，正在加载…' : ''}`}
-      />
+          <Alert
+            type="info"
+            showIcon
+            content={`当前共有 ${state.communities.length} 个社区，已接入 ${totalServerCount} 台服务器，在线玩家 ${totalOnlinePlayerCount} 人。当前接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}${bootstrapping ? '，正在加载…' : ''}`}
+          />
 
-      {apiError ? <Alert type="warning" showIcon content={`接口提示：${apiError}`} /> : null}
+          {apiError ? <Alert type="warning" showIcon content={`接口提示：${apiError}`} /> : null}
+        </Space>
+      </Card>
 
       <Row gutter={[16, 16]}>
         {state.communities.map((community) => {
@@ -698,29 +707,34 @@ export const CommunityManagementPage = () => {
 
           return (
             <Col xs={24} lg={12} key={community.id}>
-              <Card
-                title={community.name}
-                extra={
-                  <Space size="small">
-                    <Button type="outline" size="small" onClick={() => openServerDrawer(community)}>
-                      添加服务器
-                    </Button>
-                    <Button type="outline" size="small" icon={<IconEdit />} onClick={() => openCommunityEditModal(community)}>
-                      编辑社区
-                    </Button>
-                    <Button
-                      type="outline"
-                      size="small"
-                      status="danger"
-                      icon={<IconDelete />}
-                      onClick={() => handleDeleteCommunity(community)}
-                    >
-                      删除社区
-                    </Button>
-                  </Space>
-                }
-              >
+              <Card className="section-card community-card">
                 <Space direction="vertical" size="medium" style={{ width: '100%' }}>
+                  <div className="community-card-header">
+                    <div className="community-card-header-main">
+                      <Typography.Title heading={6} className="community-card-heading">
+                        {community.name}
+                      </Typography.Title>
+                    </div>
+
+                    <Space size="small" wrap className="community-card-actions">
+                      <Button type="outline" size="small" onClick={() => openServerDrawer(community)}>
+                        添加服务器
+                      </Button>
+                      <Button type="outline" size="small" icon={<IconEdit />} onClick={() => openCommunityEditModal(community)}>
+                        编辑社区
+                      </Button>
+                      <Button
+                        type="outline"
+                        size="small"
+                        status="danger"
+                        icon={<IconDelete />}
+                        onClick={() => handleDeleteCommunity(community)}
+                      >
+                        删除社区
+                      </Button>
+                    </Space>
+                  </div>
+
                   <Space size="small" wrap>
                     <Tag color="arcoblue">创建于 {formatTime(community.createdAt)}</Tag>
                     <Tag color="green">{community.servers.length} 台服务器</Tag>

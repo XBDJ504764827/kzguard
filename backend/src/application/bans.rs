@@ -1,11 +1,14 @@
 use crate::{
     application::{
-        admins::get_operator_snapshot, communities::{ensure_kzguard_command_available, quote_rcon_argument},
-        mappers::map_ban_record, operation_logs::append_operation_log, server_presence,
+        admins::get_operator_snapshot,
+        communities::{ensure_kzguard_command_available, quote_rcon_argument},
+        mappers::map_ban_record,
+        operation_logs::append_operation_log,
+        server_presence,
     },
     domain::{
         db::DbBanRecord,
-        models::{BanRecord, OperatorSnapshot},
+        models::{BanRecord, OperatorSnapshot, ResolvedSteamIdentifiers},
     },
     error::{AppError, AppResult},
     http::requests::{BanRecordUpdateDraft, BanServerPlayerDraft, ManualBanDraft},
@@ -14,7 +17,7 @@ use crate::{
         convert::trim_to_none,
         ids::prefixed_id,
         rcon::execute_rcon_command,
-        steam::resolve_steam_identifiers,
+        steam::{resolve_steam_identifiers_strict, resolve_steam_profile, steam_vanity_regex},
         time::{iso_to_mysql, now_iso},
         validation::validate_ban_draft,
     },
@@ -70,14 +73,9 @@ pub(crate) async fn ban_server_player(
         quote_rcon_argument(draft.reason.trim()),
     );
 
-    let response = execute_rcon_command(
-        &target.ip,
-        target.port,
-        &target.rcon_password,
-        &command,
-    )
-    .await
-    .map_err(|message| AppError::http(StatusCode::BAD_REQUEST, message))?;
+    let response = execute_rcon_command(&target.ip, target.port, &target.rcon_password, &command)
+        .await
+        .map_err(|message| AppError::http(StatusCode::BAD_REQUEST, message))?;
 
     ensure_kzguard_command_available(&response)?;
 
@@ -122,6 +120,22 @@ pub(crate) async fn list_bans(pool: &MySqlPool) -> AppResult<Vec<BanRecord>> {
     Ok(rows.into_iter().map(map_ban_record).collect())
 }
 
+pub(crate) async fn list_public_bans(
+    pool: &MySqlPool,
+    status: Option<String>,
+    search: Option<String>,
+) -> AppResult<Vec<BanRecord>> {
+    let normalized_status = normalize_ban_status_filter(status)?;
+    let normalized_search = trim_to_none(search);
+    let bans = list_bans(pool).await?;
+
+    Ok(bans
+        .into_iter()
+        .filter(|ban| matches_public_ban_status(ban, normalized_status.as_deref()))
+        .filter(|ban| matches_ban_search(ban, normalized_search.as_deref()))
+        .collect())
+}
+
 pub(crate) async fn create_manual_ban_entry(
     pool: &MySqlPool,
     draft: ManualBanDraft,
@@ -136,10 +150,12 @@ pub(crate) async fn create_manual_ban_entry(
     )?;
 
     let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
-    let ban = create_ban_record(
+    let identifiers = resolve_manual_ban_identifiers(&draft.steam_identifier).await?;
+    let ban = build_ban_record(
         trim_to_none(draft.nickname),
         draft.ban_type,
         draft.steam_identifier,
+        identifiers,
         draft.ip_address,
         draft.reason,
         draft.duration_seconds,
@@ -147,7 +163,7 @@ pub(crate) async fn create_manual_ban_entry(
         None,
         &operator,
         "manual",
-    )?;
+    );
 
     insert_ban_record(pool, &ban).await?;
 
@@ -196,7 +212,7 @@ pub(crate) async fn update_ban_record(
 
     let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
     let existing = get_ban_record(pool, ban_id).await?;
-    let identifiers = resolve_steam_identifiers(&draft.steam_identifier)?;
+    let identifiers = resolve_manual_ban_identifiers(&draft.steam_identifier).await?;
     let updated_at = now_iso();
 
     let updated = BanRecord {
@@ -394,10 +410,38 @@ pub(crate) fn create_ban_record(
     operator: &OperatorSnapshot,
     source: &str,
 ) -> AppResult<BanRecord> {
-    let identifiers = resolve_steam_identifiers(&steam_identifier)?;
+    let identifiers = resolve_steam_identifiers_strict(&steam_identifier)?;
+    Ok(build_ban_record(
+        nickname,
+        ban_type,
+        steam_identifier,
+        identifiers,
+        ip_address,
+        reason,
+        duration_seconds,
+        server_name,
+        community_name,
+        operator,
+        source,
+    ))
+}
+
+fn build_ban_record(
+    nickname: Option<String>,
+    ban_type: String,
+    steam_identifier: String,
+    identifiers: ResolvedSteamIdentifiers,
+    ip_address: Option<String>,
+    reason: String,
+    duration_seconds: Option<i32>,
+    server_name: String,
+    community_name: Option<String>,
+    operator: &OperatorSnapshot,
+    source: &str,
+) -> BanRecord {
     let now = now_iso();
 
-    Ok(BanRecord {
+    BanRecord {
         id: prefixed_id("ban"),
         nickname,
         ban_type,
@@ -421,5 +465,70 @@ pub(crate) fn create_ban_record(
         revoked_by_operator_id: None,
         revoked_by_operator_name: None,
         revoked_by_operator_role: None,
-    })
+    }
+}
+
+async fn resolve_manual_ban_identifiers(input: &str) -> AppResult<ResolvedSteamIdentifiers> {
+    if steam_vanity_regex().is_match(input.trim()) {
+        let profile = resolve_steam_profile(input).await?;
+        return Ok(ResolvedSteamIdentifiers {
+            steam_id64: profile.steam_id64,
+            steam_id: profile.steam_id,
+            steam_id3: profile.steam_id3,
+        });
+    }
+
+    resolve_steam_identifiers_strict(input)
+}
+
+fn normalize_ban_status_filter(status: Option<String>) -> AppResult<Option<String>> {
+    match trim_to_none(status).as_deref() {
+        None | Some("all") => Ok(None),
+        Some("active") => Ok(Some("active".to_string())),
+        Some("revoked") => Ok(Some("revoked".to_string())),
+        Some(_) => Err(AppError::http(
+            StatusCode::BAD_REQUEST,
+            "封禁状态仅支持 active、revoked 或 all",
+        )),
+    }
+}
+
+fn matches_public_ban_status(ban: &BanRecord, status: Option<&str>) -> bool {
+    match status {
+        Some(expected_status) => ban.status == expected_status,
+        None => true,
+    }
+}
+
+fn matches_ban_search(ban: &BanRecord, search: Option<&str>) -> bool {
+    let Some(search) = search.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+
+    let normalized_search = search.to_lowercase();
+    let matches_text = [
+        ban.nickname.as_deref(),
+        Some(ban.steam_identifier.as_str()),
+        Some(ban.steam_id64.as_str()),
+        Some(ban.steam_id.as_str()),
+        Some(ban.steam_id3.as_str()),
+        ban.ip_address.as_deref(),
+        Some(ban.server_name.as_str()),
+        ban.community_name.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.to_lowercase().contains(&normalized_search));
+
+    if matches_text {
+        return true;
+    }
+
+    if let Ok(search_identifiers) = resolve_steam_identifiers_strict(search) {
+        return ban.steam_id64 == search_identifiers.steam_id64
+            || ban.steam_id == search_identifiers.steam_id
+            || ban.steam_id3 == search_identifiers.steam_id3;
+    }
+
+    false
 }

@@ -28,6 +28,17 @@ pub(crate) fn build_router(state: SharedState) -> Router {
         .route("/api/auth/login", post(login_handler))
         .route("/api/auth/session", get(auth_session_handler))
         .route("/api/auth/logout", post(logout_handler))
+        .route("/api/public/steam/resolve", get(resolve_public_steam_handler))
+        .route(
+            "/api/public/whitelist/history",
+            get(get_public_whitelist_history_handler),
+        )
+        .route("/api/public/whitelist", get(list_public_whitelist_handler))
+        .route(
+            "/api/public/whitelist/applications",
+            post(create_public_whitelist_application_handler),
+        )
+        .route("/api/public/bans", get(list_public_bans_handler))
         .route("/api/internal/server-presence/report", post(report_server_presence_handler))
         .route(
             "/api/communities",
@@ -66,10 +77,7 @@ pub(crate) fn build_router(state: SharedState) -> Router {
             "/api/whitelist/applications",
             post(create_whitelist_application_handler),
         )
-        .route(
-            "/api/whitelist/manual",
-            post(create_whitelist_manual_handler),
-        )
+        .route("/api/whitelist/manual", post(create_whitelist_manual_handler))
         .route(
             "/api/whitelist/{player_id}/status",
             patch(update_whitelist_status_handler),

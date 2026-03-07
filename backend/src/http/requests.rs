@@ -111,6 +111,15 @@ pub(crate) struct ApplicationDraft {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct PublicWhitelistApplicationDraft {
+    pub(crate) nickname: Option<String>,
+    pub(crate) steam_identifier: String,
+    pub(crate) contact: Option<String>,
+    pub(crate) note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ManualWhitelistDraft {
     pub(crate) nickname: String,
     pub(crate) steam_id: String,
@@ -151,6 +160,22 @@ pub(crate) struct WebsiteAdminUpdateDraft {
 #[derive(Debug, Deserialize)]
 pub(crate) struct WhitelistQuery {
     pub(crate) status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PublicListQuery {
+    pub(crate) status: Option<String>,
+    pub(crate) search: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PublicSteamResolveQuery {
+    pub(crate) identifier: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PublicWhitelistHistoryQuery {
+    pub(crate) identifier: String,
 }
 
 #[derive(Debug, Deserialize)]

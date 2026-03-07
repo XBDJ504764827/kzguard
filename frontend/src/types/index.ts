@@ -3,6 +3,8 @@ export type ApiMode = 'mock' | 'http';
 export type BanType = 'steam_account' | 'ip';
 export type BanSource = 'manual' | 'server_action';
 export type BanStatus = 'active' | 'revoked';
+export type PublicBanStatusFilter = BanStatus | 'all';
+export type PublicWhitelistStatusFilter = WhitelistStatus | 'all';
 
 export interface LoginDraft {
   username: string;
@@ -68,6 +70,16 @@ export interface WhitelistPlayer {
   source: WhitelistSource;
   appliedAt: string;
   reviewedAt?: string;
+}
+
+export interface WhitelistApplicationHistory {
+  steamId64: string;
+  steamId: string;
+  steamId3: string;
+  duplicateBlocked: boolean;
+  blockReason?: string;
+  historyHint?: string;
+  records: WhitelistPlayer[];
 }
 
 export type WebsiteAdminRole = 'system_admin' | 'normal_admin';
@@ -171,6 +183,21 @@ export interface ApplicationDraft {
   steamId: string;
   contact?: string;
   note?: string;
+}
+
+export interface PublicWhitelistApplicationDraft {
+  nickname?: string;
+  steamIdentifier: string;
+  contact?: string;
+  note?: string;
+}
+
+export interface ResolvedSteamProfile {
+  nickname: string;
+  steamId64: string;
+  steamId: string;
+  steamId3: string;
+  profileUrl: string;
 }
 
 export interface WebsiteAdmin {
