@@ -10,69 +10,74 @@ public Plugin myinfo =
 {
 	name = "KZ Guard Presence",
 	author = "wqq",
-	description = "Reports live CS:GO players to KZ Guard and exposes kick/ban commands for RCON",
-	version = "0.1.0",
+	description = "Reports live CS:GO players to KZ Guard with shared config/cache and plugin_token auth",
+	version = "0.3.0",
 	url = ""
 };
 
-ConVar g_ApiUrlCvar;
-ConVar g_ServerIdCvar;
-ConVar g_RconPasswordCvar;
-ConVar g_ReportIntervalCvar;
+char g_ApiUrl[256];
+char g_AccessCheckUrl[256];
+char g_AccessSyncUrl[256];
+char g_ServerId[128];
+char g_PluginToken[192];
+char g_AccessCacheFile[PLATFORM_MAX_PATH];
+char g_InstancePort[16];
+float g_ReportInterval = 15.0;
+float g_AccessSyncInterval = 60.0;
 Handle g_ReportTimer = null;
+Handle g_AccessSyncTimer = null;
 bool g_ReportInFlight = false;
+bool g_AccessSyncInFlight = false;
+bool g_ClientAccessCheckInFlight[MAXPLAYERS + 1];
+StringMap g_RequestUserIds;
+KeyValues g_LocalAccessKv = null;
+bool g_LocalAccessLoaded = false;
 
 public void OnPluginStart()
 {
-	g_ApiUrlCvar = CreateConVar(
-		"kzguard_api_url",
-		"",
-		"KZ Guard 后端玩家上报 API 地址，例如 http://192.168.0.132:3000/api/internal/server-presence/report"
-	);
-	g_ServerIdCvar = CreateConVar(
-		"kzguard_server_id",
-		"",
-		"KZ Guard 后台中的服务器 ID"
-	);
-	g_RconPasswordCvar = CreateConVar(
-		"kzguard_server_rcon_password",
-		"",
-		"KZ Guard 后台配置的该服务器 RCON 密码，用于上报校验"
-	);
-	g_ReportIntervalCvar = CreateConVar(
-		"kzguard_report_interval",
-		"15",
-		"在线玩家上报间隔（秒）",
-		0,
-		true,
-		5.0,
-		true,
-		120.0
-	);
-
 	RegServerCmd("kzguard_kick_userid", Command_KickUserId, "KZ Guard 按 userid 踢出玩家");
 	RegServerCmd("kzguard_ban_userid", Command_BanUserId, "KZ Guard 按 userid 封禁玩家");
 
-	AutoExecConfig(true, "kzguard");
-	PrintToServer("[KZ Guard] 已生成或加载配置文件 cfg/sourcemod/kzguard.cfg，请在该文件中填写上报地址与服务器标识。");
+	g_RequestUserIds = new StringMap();
+	EnsureConfigTemplateExists();
+	LoadRuntimeConfiguration();
+	LoadLocalAccessCache();
 	ResetReportTimer();
+	ResetAccessSyncTimer();
+
+	if (g_InstancePort[0] != '\0')
+	{
+		PrintToServer("[KZ Guard] 已加载共享配置文件 cfg/sourcemod/kzguard.cfg，当前实例端口：%s", g_InstancePort);
+	}
+	else
+	{
+		PrintToServer("[KZ Guard] 已加载共享配置文件 cfg/sourcemod/kzguard.cfg，但暂未识别当前游戏服端口。");
+	}
 }
 
 public void OnConfigsExecuted()
 {
+	LoadRuntimeConfiguration();
+	LoadLocalAccessCache();
 	ResetReportTimer();
+	ResetAccessSyncTimer();
 	QueuePresenceReport(2.0);
+	QueueAccessSync(3.0);
 }
 
 public void OnMapStart()
 {
+	LoadRuntimeConfiguration();
+	LoadLocalAccessCache();
 	QueuePresenceReport(2.0);
+	QueueAccessSync(3.0);
 }
 
-public void OnClientPutInServer(int client)
+public void OnClientPostAdminCheck(int client)
 {
 	if (!IsFakeClient(client))
 	{
+		QueueClientAccessCheck(client, 1.0);
 		QueuePresenceReport(2.0);
 	}
 }
@@ -81,6 +86,7 @@ public void OnClientDisconnect_Post(int client)
 {
 	if (!IsFakeClient(client))
 	{
+		g_ClientAccessCheckInFlight[client] = false;
 		QueuePresenceReport(1.0);
 	}
 }
@@ -178,9 +184,31 @@ public Action Timer_ReportPresence(Handle timer, any data)
 	return Plugin_Continue;
 }
 
+public Action Timer_AccessSync(Handle timer, any data)
+{
+	SendAccessSyncRequest();
+	return Plugin_Continue;
+}
+
 public Action Timer_QueuedReport(Handle timer, any data)
 {
 	SendPresenceReport();
+	return Plugin_Stop;
+}
+
+public Action Timer_QueuedAccessSync(Handle timer, any data)
+{
+	SendAccessSyncRequest();
+	return Plugin_Stop;
+}
+
+public Action Timer_QueuedClientAccessCheck(Handle timer, any userId)
+{
+	int client = GetClientOfUserId(userId);
+	if (client > 0 && IsClientInGame(client) && !IsFakeClient(client))
+	{
+		SendClientAccessCheck(client);
+	}
 	return Plugin_Stop;
 }
 
@@ -202,6 +230,431 @@ public void OnPresenceReportCompleted(Handle request, bool failure, bool request
 	delete request;
 }
 
+public void OnAccessSyncCompleted(Handle request, bool failure, bool requestSuccessful, EHTTPStatusCode statusCode, any contextValue)
+{
+	g_AccessSyncInFlight = false;
+	int status = view_as<int>(statusCode);
+
+	if (failure || !requestSuccessful || status < view_as<int>(k_EHTTPStatusCode200OK) || status >= 300)
+	{
+		LogError(
+			"[KZ Guard] 准入缓存同步失败：failure=%d requestSuccessful=%d status=%d",
+			failure,
+			requestSuccessful,
+			status
+		);
+		delete request;
+		return;
+	}
+
+	char tempPath[PLATFORM_MAX_PATH];
+	BuildAccessSyncTempFilePath(tempPath, sizeof(tempPath));
+	if (!SteamWorks_WriteHTTPResponseBodyToFile(request, tempPath))
+	{
+		LogError("[KZ Guard] 写入临时准入快照失败：%s", tempPath);
+		delete request;
+		return;
+	}
+
+	if (!MergeSyncedSnapshotIntoSharedCache(tempPath))
+	{
+		LogError("[KZ Guard] 合并共享准入缓存失败：%s", tempPath);
+	}
+
+	DeleteFile(tempPath);
+
+	if (!LoadLocalAccessCache())
+	{
+		LogError("[KZ Guard] 准入缓存同步成功，但重新加载共享缓存失败");
+	}
+
+	delete request;
+}
+
+public void OnAccessCheckCompleted(Handle request, bool failure, bool requestSuccessful, EHTTPStatusCode statusCode, any contextValue)
+{
+	int userId = 0;
+	TakeRequestUserId(request, userId);
+	int client = GetClientOfUserId(userId);
+	if (client > 0)
+	{
+		g_ClientAccessCheckInFlight[client] = false;
+	}
+
+	int status = view_as<int>(statusCode);
+	if (client <= 0 || !IsClientInGame(client) || IsFakeClient(client))
+	{
+		delete request;
+		return;
+	}
+
+	if (failure || !requestSuccessful || status < view_as<int>(k_EHTTPStatusCode200OK) || status >= 300)
+	{
+		LogError(
+			"[KZ Guard] 进服校验接口失败，改用本地缓存：client=%N failure=%d requestSuccessful=%d status=%d",
+			client,
+			failure,
+			requestSuccessful,
+			status
+		);
+		HandleAccessCheckFallback(client);
+		delete request;
+		return;
+	}
+
+	char body[1024];
+	if (!SteamWorks_GetHTTPResponseBodyData(request, body, sizeof(body)))
+	{
+		LogError("[KZ Guard] 进服校验响应体读取失败，改用本地缓存：client=%N", client);
+		HandleAccessCheckFallback(client);
+		delete request;
+		return;
+	}
+
+	bool allow = true;
+	char message[256];
+	if (!ParseAccessCheckResponse(body, allow, message, sizeof(message)))
+	{
+		LogError("[KZ Guard] 进服校验响应解析失败，改用本地缓存：client=%N body=%s", client, body);
+		HandleAccessCheckFallback(client);
+		delete request;
+		return;
+	}
+
+	if (!allow)
+	{
+		if (message[0] == '\0')
+		{
+			strcopy(message, sizeof(message), "你当前不满足服务器准入条件。");
+		}
+		KickClient(client, "%s", message);
+		QueuePresenceReport(1.0);
+	}
+
+	delete request;
+}
+
+void ResetRuntimeConfiguration()
+{
+	g_ApiUrl[0] = '\0';
+	g_AccessCheckUrl[0] = '\0';
+	g_AccessSyncUrl[0] = '\0';
+	g_ServerId[0] = '\0';
+	g_PluginToken[0] = '\0';
+	g_InstancePort[0] = '\0';
+	strcopy(g_AccessCacheFile, sizeof(g_AccessCacheFile), "data/kzguard_access_cache.kv");
+	g_ReportInterval = 15.0;
+	g_AccessSyncInterval = 60.0;
+}
+
+bool ResolveCurrentInstancePort(char[] portBuffer, int maxlen)
+{
+	ConVar hostPort = FindConVar("hostport");
+	if (hostPort == null)
+	{
+		hostPort = FindConVar("port");
+	}
+
+	if (hostPort == null)
+	{
+		LogError("[KZ Guard] 未找到 hostport/port ConVar，无法识别当前实例");
+		portBuffer[0] = '\0';
+		return false;
+	}
+
+	int port = hostPort.IntValue;
+	if (port <= 0)
+	{
+		LogError("[KZ Guard] 当前实例端口无效：%d", port);
+		portBuffer[0] = '\0';
+		return false;
+	}
+
+	IntToString(port, portBuffer, maxlen);
+	return true;
+}
+
+void BuildConfigFilePath(char[] path, int maxlen)
+{
+	BuildPath(Path_SM, path, maxlen, "../../cfg/sourcemod/kzguard.cfg");
+}
+
+void EnsureConfigTemplateExists()
+{
+	char configPath[PLATFORM_MAX_PATH];
+	BuildConfigFilePath(configPath, sizeof(configPath));
+	if (FileExists(configPath))
+	{
+		return;
+	}
+
+	File file = OpenFile(configPath, "w");
+	if (file == null)
+	{
+		LogError("[KZ Guard] 无法生成共享配置模板：%s", configPath);
+		return;
+	}
+
+	WriteFileLine(file, "\"KZGuard\"");
+	WriteFileLine(file, "{");
+	WriteFileLine(file, "	\"global\"");
+	WriteFileLine(file, "	{");
+	WriteFileLine(file, "		\"api_url\"\t\"http://192.168.0.132:3000/api/internal/server-presence/report\"");
+	WriteFileLine(file, "		\"access_check_url\"\t\"http://192.168.0.132:3000/api/internal/server-access/check\"");
+	WriteFileLine(file, "		\"access_sync_url\"\t\"http://192.168.0.132:3000/api/internal/server-access/sync\"");
+	WriteFileLine(file, "		\"report_interval\"\t\"15\"");
+	WriteFileLine(file, "		\"access_sync_interval\"\t\"60\"");
+	WriteFileLine(file, "		\"access_cache_file\"\t\"data/kzguard_access_cache.kv\"");
+	WriteFileLine(file, "	}");
+	WriteFileLine(file, "");
+	WriteFileLine(file, "	\"instances\"");
+	WriteFileLine(file, "	{");
+	WriteFileLine(file, "		\"27015\"");
+	WriteFileLine(file, "		{");
+	WriteFileLine(file, "			\"server_id\"\t\"server_xxx\"");
+	WriteFileLine(file, "			\"plugin_token\"\t\"pt_xxx\"");
+	WriteFileLine(file, "		}");
+	WriteFileLine(file, "	}");
+	WriteFileLine(file, "}");
+	delete file;
+
+	PrintToServer("[KZ Guard] 已自动生成共享配置模板：%s", configPath);
+}
+
+bool LoadRuntimeConfiguration()
+{
+	ResetRuntimeConfiguration();
+	ResolveCurrentInstancePort(g_InstancePort, sizeof(g_InstancePort));
+
+	char configPath[PLATFORM_MAX_PATH];
+	BuildConfigFilePath(configPath, sizeof(configPath));
+	if (!FileExists(configPath))
+	{
+		EnsureConfigTemplateExists();
+		return false;
+	}
+
+	KeyValues kv = new KeyValues("KZGuard");
+	if (!kv.ImportFromFile(configPath))
+	{
+		LogError("[KZ Guard] 共享配置文件读取失败：%s", configPath);
+		delete kv;
+		return false;
+	}
+
+	if (kv.JumpToKey("global", false))
+	{
+		kv.GetString("api_url", g_ApiUrl, sizeof(g_ApiUrl), "");
+		kv.GetString("access_check_url", g_AccessCheckUrl, sizeof(g_AccessCheckUrl), "");
+		kv.GetString("access_sync_url", g_AccessSyncUrl, sizeof(g_AccessSyncUrl), "");
+		kv.GetString("access_cache_file", g_AccessCacheFile, sizeof(g_AccessCacheFile), "data/kzguard_access_cache.kv");
+
+		int reportInterval = kv.GetNum("report_interval", 15);
+		if (reportInterval < 5)
+		{
+			reportInterval = 5;
+		}
+		if (reportInterval > 120)
+		{
+			reportInterval = 120;
+		}
+		g_ReportInterval = float(reportInterval);
+
+		int syncInterval = kv.GetNum("access_sync_interval", 60);
+		if (syncInterval < 15)
+		{
+			syncInterval = 15;
+		}
+		if (syncInterval > 600)
+		{
+			syncInterval = 600;
+		}
+		g_AccessSyncInterval = float(syncInterval);
+		kv.GoBack();
+	}
+
+	if (g_InstancePort[0] != '\0' && kv.JumpToKey("instances", false))
+	{
+		if (kv.JumpToKey(g_InstancePort, false))
+		{
+			kv.GetString("server_id", g_ServerId, sizeof(g_ServerId), "");
+			kv.GetString("plugin_token", g_PluginToken, sizeof(g_PluginToken), "");
+			kv.GoBack();
+		}
+		kv.GoBack();
+	}
+
+	delete kv;
+
+	TrimString(g_ApiUrl);
+	TrimString(g_AccessCheckUrl);
+	TrimString(g_AccessSyncUrl);
+	TrimString(g_ServerId);
+	TrimString(g_PluginToken);
+	TrimString(g_AccessCacheFile);
+
+	if (g_AccessCacheFile[0] == '\0')
+	{
+		strcopy(g_AccessCacheFile, sizeof(g_AccessCacheFile), "data/kzguard_access_cache.kv");
+	}
+
+	if (g_InstancePort[0] == '\0')
+	{
+		return false;
+	}
+
+	if (g_ServerId[0] == '\0' || g_PluginToken[0] == '\0')
+	{
+		PrintToServer("[KZ Guard] 未在共享配置中找到端口 %s 对应的实例配置，请补齐 server_id 与 plugin_token。", g_InstancePort);
+		return false;
+	}
+
+	PrintToServer("[KZ Guard] 已读取实例配置：port=%s serverId=%s cache=%s", g_InstancePort, g_ServerId, g_AccessCacheFile);
+	return true;
+}
+
+bool HasPresenceConfiguration()
+{
+	return g_ApiUrl[0] != '\0' && g_ServerId[0] != '\0' && g_PluginToken[0] != '\0';
+}
+
+bool HasAccessSyncConfiguration()
+{
+	return g_AccessSyncUrl[0] != '\0' && g_ServerId[0] != '\0' && g_PluginToken[0] != '\0';
+}
+
+bool HasAccessCheckConfiguration()
+{
+	return g_AccessCheckUrl[0] != '\0' && g_ServerId[0] != '\0' && g_PluginToken[0] != '\0';
+}
+
+void BuildAccessSyncTempFilePath(char[] path, int maxlen)
+{
+	if (g_InstancePort[0] == '\0')
+	{
+		BuildPath(Path_SM, path, maxlen, "data/kzguard_access_sync.tmp.kv");
+		return;
+	}
+
+	BuildPath(Path_SM, path, maxlen, "data/kzguard_access_sync_%s.tmp.kv", g_InstancePort);
+}
+
+bool MergeSyncedSnapshotIntoSharedCache(const char[] snapshotPath)
+{
+	KeyValues source = new KeyValues("KZGuardAccess");
+	if (!source.ImportFromFile(snapshotPath))
+	{
+		LogError("[KZ Guard] 无法读取同步下来的服务器准入快照：%s", snapshotPath);
+		delete source;
+		return false;
+	}
+
+	char cachePath[PLATFORM_MAX_PATH];
+	BuildAccessCacheFilePath(cachePath, sizeof(cachePath));
+
+	KeyValues shared = new KeyValues("KZGuardAccessCache");
+	if (FileExists(cachePath) && !shared.ImportFromFile(cachePath))
+	{
+		LogError("[KZ Guard] 共享准入缓存文件读取失败，将尝试重建：%s", cachePath);
+	}
+
+	shared.Rewind();
+	shared.SetString("schema", "shared-cache-v1");
+	shared.SetString("lastWriterPort", g_InstancePort);
+	if (!shared.JumpToKey("servers", true))
+	{
+		delete source;
+		delete shared;
+		return false;
+	}
+	if (!shared.JumpToKey(g_ServerId, true))
+	{
+		delete source;
+		delete shared;
+		return false;
+	}
+
+	CopySnapshotSection(source, shared);
+
+	shared.Rewind();
+	bool exported = shared.ExportToFile(cachePath);
+	delete source;
+	delete shared;
+
+	if (!exported)
+	{
+		LogError("[KZ Guard] 共享准入缓存文件写入失败：%s", cachePath);
+	}
+
+	return exported;
+}
+
+void CopySnapshotSection(KeyValues source, KeyValues destination)
+{
+	CopyStringField(source, destination, "generatedAt");
+	CopyStringField(source, destination, "serverId");
+	CopyStringField(source, destination, "serverName");
+	CopyStringField(source, destination, "communityName");
+	destination.SetNum("whitelistEnabled", source.GetNum("whitelistEnabled", 0));
+	destination.SetNum("entryVerificationEnabled", source.GetNum("entryVerificationEnabled", 0));
+	destination.SetNum("minEntryRating", source.GetNum("minEntryRating", 0));
+	destination.SetNum("minSteamLevel", source.GetNum("minSteamLevel", 0));
+
+	if (destination.JumpToKey("players", false))
+	{
+		destination.DeleteThis();
+	}
+
+	if (!destination.JumpToKey("players", true))
+	{
+		return;
+	}
+
+	if (source.JumpToKey("players", false))
+	{
+		if (source.GotoFirstSubKey())
+		{
+			do
+			{
+				char playerKey[64];
+				source.GetSectionName(playerKey, sizeof(playerKey));
+				if (destination.JumpToKey(playerKey, true))
+				{
+					CopyPlayerSection(source, destination);
+					destination.GoBack();
+				}
+			}
+			while (source.GotoNextKey());
+		}
+		source.GoBack();
+	}
+
+	destination.GoBack();
+}
+
+void CopyPlayerSection(KeyValues source, KeyValues destination)
+{
+	CopyStringField(source, destination, "steamId64");
+	CopyStringField(source, destination, "steamId");
+	CopyStringField(source, destination, "steamId3");
+	CopyStringField(source, destination, "nickname");
+	CopyStringField(source, destination, "ipAddress");
+	CopyStringField(source, destination, "rating");
+	CopyStringField(source, destination, "steamLevel");
+	destination.SetNum("isWhitelisted", source.GetNum("isWhitelisted", 0));
+	destination.SetNum("meetsEntryVerification", source.GetNum("meetsEntryVerification", 0));
+	destination.SetNum("canJoin", source.GetNum("canJoin", 0));
+	CopyStringField(source, destination, "message");
+	CopyStringField(source, destination, "refreshedAt");
+}
+
+void CopyStringField(KeyValues source, KeyValues destination, const char[] key)
+{
+	char value[1024];
+	source.GetString(key, value, sizeof(value), "");
+	destination.SetString(key, value);
+}
+
 void ResetReportTimer()
 {
 	if (g_ReportTimer != null)
@@ -211,8 +664,24 @@ void ResetReportTimer()
 	}
 
 	g_ReportTimer = CreateTimer(
-		g_ReportIntervalCvar.FloatValue,
+		g_ReportInterval,
 		Timer_ReportPresence,
+		_,
+		TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE
+	);
+}
+
+void ResetAccessSyncTimer()
+{
+	if (g_AccessSyncTimer != null)
+	{
+		KillTimer(g_AccessSyncTimer);
+		g_AccessSyncTimer = null;
+	}
+
+	g_AccessSyncTimer = CreateTimer(
+		g_AccessSyncInterval,
+		Timer_AccessSync,
 		_,
 		TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE
 	);
@@ -223,41 +692,35 @@ void QueuePresenceReport(float delay)
 	CreateTimer(delay, Timer_QueuedReport, _, TIMER_FLAG_NO_MAPCHANGE);
 }
 
+void QueueAccessSync(float delay)
+{
+	CreateTimer(delay, Timer_QueuedAccessSync, _, TIMER_FLAG_NO_MAPCHANGE);
+}
+
+void QueueClientAccessCheck(int client, float delay)
+{
+	CreateTimer(delay, Timer_QueuedClientAccessCheck, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
+}
+
 void SendPresenceReport()
 {
-	if (g_ReportInFlight)
+	if (g_ReportInFlight || !HasPresenceConfiguration())
 	{
-		return;
-	}
-
-	char apiUrl[256];
-	char serverId[128];
-	char rconPassword[128];
-	g_ApiUrlCvar.GetString(apiUrl, sizeof(apiUrl));
-	g_ServerIdCvar.GetString(serverId, sizeof(serverId));
-	g_RconPasswordCvar.GetString(rconPassword, sizeof(rconPassword));
-	TrimString(apiUrl);
-	TrimString(serverId);
-	TrimString(rconPassword);
-
-	if (apiUrl[0] == '\0' || serverId[0] == '\0' || rconPassword[0] == '\0')
-	{
-		LogError("[KZ Guard] 未完成配置，请检查 kzguard_api_url / kzguard_server_id / kzguard_server_rcon_password");
 		return;
 	}
 
 	char payload[32768];
-	BuildPresencePayload(payload, sizeof(payload), serverId);
+	BuildPresencePayload(payload, sizeof(payload), g_ServerId);
 
-	Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, apiUrl);
+	Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, g_ApiUrl);
 	if (request == null)
 	{
-		LogError("[KZ Guard] 创建 HTTP 请求失败，请确认已安装 SteamWorks 扩展");
+		LogError("[KZ Guard] 创建在线玩家上报 HTTP 请求失败，请确认已安装 SteamWorks 扩展");
 		return;
 	}
 
 	SteamWorks_SetHTTPRequestHeaderValue(request, "Content-Type", "application/json");
-	SteamWorks_SetHTTPRequestHeaderValue(request, "X-Server-Rcon-Password", rconPassword);
+	SteamWorks_SetHTTPRequestHeaderValue(request, "X-Plugin-Token", g_PluginToken);
 	SteamWorks_SetHTTPCallbacks(request, OnPresenceReportCompleted);
 	SteamWorks_SetHTTPRequestRawPostBody(request, "application/json", payload, strlen(payload));
 
@@ -266,8 +729,304 @@ void SendPresenceReport()
 	{
 		g_ReportInFlight = false;
 		delete request;
-		LogError("[KZ Guard] 发送 HTTP 请求失败，请确认 SteamWorks 扩展工作正常");
+		LogError("[KZ Guard] 发送在线玩家上报 HTTP 请求失败，请确认 SteamWorks 扩展工作正常");
 	}
+}
+
+void SendAccessSyncRequest()
+{
+	if (g_AccessSyncInFlight || !HasAccessSyncConfiguration())
+	{
+		return;
+	}
+
+	char requestUrl[512];
+	BuildSyncUrl(g_AccessSyncUrl, g_ServerId, requestUrl, sizeof(requestUrl));
+
+	Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, requestUrl);
+	if (request == null)
+	{
+		LogError("[KZ Guard] 创建准入缓存同步 HTTP 请求失败，请确认已安装 SteamWorks 扩展");
+		return;
+	}
+
+	SteamWorks_SetHTTPRequestHeaderValue(request, "X-Plugin-Token", g_PluginToken);
+	SteamWorks_SetHTTPCallbacks(request, OnAccessSyncCompleted);
+
+	g_AccessSyncInFlight = true;
+	if (!SteamWorks_SendHTTPRequest(request))
+	{
+		g_AccessSyncInFlight = false;
+		delete request;
+		LogError("[KZ Guard] 发送准入缓存同步 HTTP 请求失败，请确认 SteamWorks 扩展工作正常");
+	}
+}
+
+void SendClientAccessCheck(int client)
+{
+	if (!IsClientInGame(client) || IsFakeClient(client) || g_ClientAccessCheckInFlight[client])
+	{
+		return;
+	}
+
+	char steamId64[64];
+	if (!GetClientAuthId(client, AuthId_SteamID64, steamId64, sizeof(steamId64), true))
+	{
+		LogError("[KZ Guard] 无法读取玩家 SteamID64，跳过进服校验：client=%N", client);
+		return;
+	}
+
+	if (!HasAccessCheckConfiguration())
+	{
+		HandleAccessCheckFallback(client);
+		return;
+	}
+
+	char requestUrl[512];
+	BuildAccessCheckUrl(g_AccessCheckUrl, g_ServerId, steamId64, requestUrl, sizeof(requestUrl));
+
+	Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, requestUrl);
+	if (request == null)
+	{
+		LogError("[KZ Guard] 创建进服校验 HTTP 请求失败，改用本地缓存：client=%N", client);
+		HandleAccessCheckFallback(client);
+		return;
+	}
+
+	StoreRequestUserId(request, GetClientUserId(client));
+	SteamWorks_SetHTTPRequestHeaderValue(request, "X-Plugin-Token", g_PluginToken);
+	SteamWorks_SetHTTPCallbacks(request, OnAccessCheckCompleted);
+	g_ClientAccessCheckInFlight[client] = true;
+
+	if (!SteamWorks_SendHTTPRequest(request))
+	{
+		g_ClientAccessCheckInFlight[client] = false;
+		int unusedUserId = 0;
+		TakeRequestUserId(request, unusedUserId);
+		delete request;
+		LogError("[KZ Guard] 发送进服校验 HTTP 请求失败，改用本地缓存：client=%N", client);
+		HandleAccessCheckFallback(client);
+	}
+}
+
+void HandleAccessCheckFallback(int client)
+{
+	bool hasDecision = false;
+	char reason[256];
+	reason[0] = '\0';
+	bool allow = EvaluateClientAccessFromLocalCache(client, hasDecision, reason, sizeof(reason));
+
+	if (hasDecision)
+	{
+		if (!allow)
+		{
+			if (reason[0] == '\0')
+			{
+				strcopy(reason, sizeof(reason), "你当前不满足服务器准入条件。");
+			}
+			KickClient(client, "%s", reason);
+			QueuePresenceReport(1.0);
+		}
+		return;
+	}
+
+	LogError("[KZ Guard] 本地准入缓存不可用，临时放行玩家：client=%N", client);
+}
+
+bool EvaluateClientAccessFromLocalCache(int client, bool &hasDecision, char[] reason, int maxlen)
+{
+	hasDecision = false;
+	reason[0] = '\0';
+
+	if (g_LocalAccessKv == null || !g_LocalAccessLoaded || g_ServerId[0] == '\0')
+	{
+		return true;
+	}
+
+	char steamId64[64];
+	if (!GetClientAuthId(client, AuthId_SteamID64, steamId64, sizeof(steamId64), true))
+	{
+		return true;
+	}
+
+	g_LocalAccessKv.Rewind();
+	if (!g_LocalAccessKv.JumpToKey("servers", false))
+	{
+		g_LocalAccessKv.Rewind();
+		return true;
+	}
+
+	if (!g_LocalAccessKv.JumpToKey(g_ServerId, false))
+	{
+		g_LocalAccessKv.Rewind();
+		return true;
+	}
+
+	bool whitelistEnabled = g_LocalAccessKv.GetNum("whitelistEnabled", 0) != 0;
+	bool entryVerificationEnabled = g_LocalAccessKv.GetNum("entryVerificationEnabled", 0) != 0;
+	int minEntryRating = g_LocalAccessKv.GetNum("minEntryRating", 0);
+	int minSteamLevel = g_LocalAccessKv.GetNum("minSteamLevel", 0);
+
+	if (g_LocalAccessKv.JumpToKey("players", false))
+	{
+		if (g_LocalAccessKv.JumpToKey(steamId64, false))
+		{
+			hasDecision = true;
+			bool allow = g_LocalAccessKv.GetNum("canJoin", 0) != 0;
+			g_LocalAccessKv.GetString("message", reason, maxlen, allow ? "允许进入服务器。" : "你当前不满足服务器准入条件。");
+			g_LocalAccessKv.Rewind();
+			return allow;
+		}
+	}
+
+	hasDecision = true;
+	if (!whitelistEnabled && !entryVerificationEnabled)
+	{
+		strcopy(reason, maxlen, "当前服务器未开启白名单与进服验证，允许进入。");
+		g_LocalAccessKv.Rewind();
+		return true;
+	}
+
+	if (whitelistEnabled && !entryVerificationEnabled)
+	{
+		strcopy(reason, maxlen, "当前服务器仅允许白名单玩家进入（共享缓存兜底）。");
+		g_LocalAccessKv.Rewind();
+		return false;
+	}
+
+	if (!whitelistEnabled && entryVerificationEnabled)
+	{
+		Format(reason, maxlen, "当前无法确认你的进服验证结果，请稍后重试（共享缓存兜底）。服务器要求最低 rating %d，最低 Steam 等级 %d。", minEntryRating, minSteamLevel);
+		g_LocalAccessKv.Rewind();
+		return false;
+	}
+
+	Format(reason, maxlen, "当前服务器已同时开启白名单和进服验证，且共享缓存中未找到你的准入记录。服务器要求最低 rating %d，最低 Steam 等级 %d。", minEntryRating, minSteamLevel);
+	g_LocalAccessKv.Rewind();
+	return false;
+}
+
+bool LoadLocalAccessCache()
+{
+	char cachePath[PLATFORM_MAX_PATH];
+	BuildAccessCacheFilePath(cachePath, sizeof(cachePath));
+
+	if (g_LocalAccessKv != null)
+	{
+		delete g_LocalAccessKv;
+		g_LocalAccessKv = null;
+	}
+	g_LocalAccessLoaded = false;
+
+	if (!FileExists(cachePath))
+	{
+		PrintToServer("[KZ Guard] 共享准入缓存文件暂不存在：%s", cachePath);
+		return false;
+	}
+
+	KeyValues kv = new KeyValues("KZGuardAccessCache");
+	if (!kv.ImportFromFile(cachePath))
+	{
+		LogError("[KZ Guard] 共享准入缓存文件读取失败：%s", cachePath);
+		delete kv;
+		return false;
+	}
+
+	g_LocalAccessKv = kv;
+	g_LocalAccessLoaded = true;
+	PrintToServer("[KZ Guard] 已加载共享准入缓存：%s", cachePath);
+	return true;
+}
+
+void BuildAccessCacheFilePath(char[] path, int maxlen)
+{
+	char configuredPath[PLATFORM_MAX_PATH];
+	strcopy(configuredPath, sizeof(configuredPath), g_AccessCacheFile);
+	TrimString(configuredPath);
+
+	if (configuredPath[0] == '\0')
+	{
+		strcopy(configuredPath, sizeof(configuredPath), "data/kzguard_access_cache.kv");
+	}
+
+	if (configuredPath[0] == '/' || (strlen(configuredPath) > 1 && configuredPath[1] == ':'))
+	{
+		strcopy(path, maxlen, configuredPath);
+		return;
+	}
+
+	BuildPath(Path_SM, path, maxlen, "%s", configuredPath);
+}
+
+void BuildSyncUrl(const char[] baseUrl, const char[] serverId, char[] output, int maxlen)
+{
+	char separator[2];
+	separator[0] = StrContains(baseUrl, "?") == -1 ? '?' : '&';
+	separator[1] = '\0';
+	Format(output, maxlen, "%s%sserverId=%s", baseUrl, separator, serverId);
+}
+
+void BuildAccessCheckUrl(const char[] baseUrl, const char[] serverId, const char[] steamId64, char[] output, int maxlen)
+{
+	char separator[2];
+	separator[0] = StrContains(baseUrl, "?") == -1 ? '?' : '&';
+	separator[1] = '\0';
+	Format(output, maxlen, "%s%sserverId=%s&steamId64=%s", baseUrl, separator, serverId, steamId64);
+}
+
+bool ParseAccessCheckResponse(const char[] body, bool &allow, char[] message, int maxlen)
+{
+	char allowValue[16];
+	if (!ExtractResponseField(body, "allow", allowValue, sizeof(allowValue)))
+	{
+		return false;
+	}
+
+	allow = StringToInt(allowValue) != 0;
+	if (!ExtractResponseField(body, "message", message, maxlen))
+	{
+		message[0] = '\0';
+	}
+	TrimString(message);
+	return true;
+}
+
+bool ExtractResponseField(const char[] body, const char[] key, char[] output, int maxlen)
+{
+	char lines[16][256];
+	int count = ExplodeString(body, "\n", lines, sizeof(lines), sizeof(lines[]));
+	char prefix[64];
+	Format(prefix, sizeof(prefix), "%s=", key);
+	int prefixLength = strlen(prefix);
+
+	for (int i = 0; i < count; i++)
+	{
+		TrimString(lines[i]);
+		if (StrContains(lines[i], prefix) == 0)
+		{
+			strcopy(output, maxlen, lines[i][prefixLength]);
+			return true;
+		}
+	}
+
+	output[0] = '\0';
+	return false;
+}
+
+void StoreRequestUserId(Handle request, int userId)
+{
+	char key[32];
+	IntToString(view_as<int>(request), key, sizeof(key));
+	g_RequestUserIds.SetValue(key, userId);
+}
+
+bool TakeRequestUserId(Handle request, int &userId)
+{
+	char key[32];
+	IntToString(view_as<int>(request), key, sizeof(key));
+	bool found = g_RequestUserIds.GetValue(key, userId);
+	g_RequestUserIds.Remove(key);
+	return found;
 }
 
 void BuildPresencePayload(char[] payload, int maxlen, const char[] serverId)

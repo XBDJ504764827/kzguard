@@ -37,6 +37,7 @@ export interface Server {
   ip: string;
   port: number;
   rconPassword: string;
+  pluginToken: string;
   rconVerifiedAt: string;
   whitelistEnabled: boolean;
   entryVerificationEnabled: boolean;
@@ -241,6 +242,7 @@ export type OperationLogAction =
   | 'server_created'
   | 'server_updated'
   | 'server_deleted'
+  | 'server_plugin_token_reset'
   | 'server_player_kicked'
   | 'server_player_banned'
   | 'ban_record_manual_created'

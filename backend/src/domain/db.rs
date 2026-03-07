@@ -16,6 +16,7 @@ pub(crate) struct DbServer {
     pub(crate) ip: String,
     pub(crate) port: i32,
     pub(crate) rcon_password: String,
+    pub(crate) plugin_token: String,
     pub(crate) rcon_verified_at: NaiveDateTime,
     pub(crate) whitelist_enabled: i8,
     pub(crate) entry_verification_enabled: i8,
@@ -26,7 +27,7 @@ pub(crate) struct DbServer {
 #[derive(Debug, FromRow)]
 pub(crate) struct DbServerPresenceAuth {
     pub(crate) id: String,
-    pub(crate) rcon_password: String,
+    pub(crate) plugin_token: String,
 }
 
 #[derive(Debug, FromRow)]
@@ -108,16 +109,27 @@ pub(crate) struct DbCommunityName {
 }
 
 #[derive(Debug, FromRow)]
-pub(crate) struct DbServerWithCommunity {
-    pub(crate) id: String,
-    pub(crate) name: String,
-    pub(crate) community_name: String,
-}
-
-#[derive(Debug, FromRow)]
 pub(crate) struct DbServerDeleteTarget {
     pub(crate) name: String,
     pub(crate) ip: String,
     pub(crate) port: i32,
     pub(crate) community_name: String,
+}
+
+
+#[derive(Debug, FromRow)]
+pub(crate) struct DbServerAccessTarget {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) community_name: String,
+    pub(crate) plugin_token: String,
+    pub(crate) whitelist_enabled: i8,
+    pub(crate) entry_verification_enabled: i8,
+    pub(crate) min_entry_rating: i32,
+    pub(crate) min_steam_level: i32,
+}
+
+#[derive(Debug, FromRow)]
+pub(crate) struct DbServerIdOnly {
+    pub(crate) id: String,
 }

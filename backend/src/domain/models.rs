@@ -44,6 +44,7 @@ pub(crate) struct Server {
     pub(crate) ip: String,
     pub(crate) port: i32,
     pub(crate) rcon_password: String,
+    pub(crate) plugin_token: String,
     pub(crate) rcon_verified_at: String,
     pub(crate) whitelist_enabled: bool,
     pub(crate) entry_verification_enabled: bool,
@@ -203,6 +204,69 @@ pub(crate) struct ResolvedSteamProfile {
     pub(crate) steam_id: String,
     pub(crate) steam_id3: String,
     pub(crate) profile_url: String,
+}
+
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PlayerAccessProfile {
+    pub(crate) steam_id64: String,
+    pub(crate) steam_id: String,
+    pub(crate) steam_id3: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) nickname: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) rating: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) steam_level: Option<i32>,
+    pub(crate) refreshed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ServerAccessPlayer {
+    pub(crate) steam_id64: String,
+    pub(crate) steam_id: String,
+    pub(crate) steam_id3: String,
+    pub(crate) nickname: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) ip_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) rating: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) steam_level: Option<i32>,
+    pub(crate) is_whitelisted: bool,
+    pub(crate) meets_entry_verification: bool,
+    pub(crate) can_join: bool,
+    pub(crate) message: String,
+    pub(crate) refreshed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ServerAccessSnapshot {
+    pub(crate) server_id: String,
+    pub(crate) server_name: String,
+    pub(crate) community_name: String,
+    pub(crate) generated_at: String,
+    pub(crate) whitelist_enabled: bool,
+    pub(crate) entry_verification_enabled: bool,
+    pub(crate) min_entry_rating: i32,
+    pub(crate) min_steam_level: i32,
+    pub(crate) players: Vec<ServerAccessPlayer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ServerAccessDecision {
+    pub(crate) server_id: String,
+    pub(crate) steam_id64: String,
+    pub(crate) can_join: bool,
+    pub(crate) is_whitelisted: bool,
+    pub(crate) meets_entry_verification: bool,
+    pub(crate) message: String,
+    pub(crate) source: String,
 }
 
 #[derive(Debug, Deserialize)]

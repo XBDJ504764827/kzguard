@@ -5,6 +5,7 @@ pub(crate) mod communities;
 pub(crate) mod health;
 pub(crate) mod operation_logs;
 pub(crate) mod public;
+pub(crate) mod server_access;
 pub(crate) mod server_presence;
 pub(crate) mod users;
 pub(crate) mod whitelist;
@@ -18,8 +19,8 @@ pub(crate) use bans::{
 pub(crate) use communities::{
     ban_player_handler, create_community_handler, create_server_handler, delete_community_handler,
     delete_server_handler, kick_player_handler, list_communities_handler,
-    list_server_players_handler, update_community_handler, update_server_handler,
-    verify_server_rcon_handler,
+    list_server_players_handler, reset_server_plugin_token_handler, update_community_handler,
+    update_server_handler, verify_server_rcon_handler,
 };
 pub(crate) use health::health_handler;
 pub(crate) use operation_logs::list_operation_logs_handler;
@@ -33,3 +34,5 @@ pub(crate) use whitelist::{
     create_whitelist_application_handler, create_whitelist_manual_handler, list_whitelist_handler,
     update_whitelist_status_handler,
 };
+
+pub(crate) use server_access::{check_server_access_handler, sync_server_access_handler};

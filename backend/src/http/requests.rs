@@ -210,3 +210,21 @@ pub(crate) struct AdminPath {
 pub(crate) struct WhitelistPlayerPath {
     pub(crate) player_id: String,
 }
+
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InternalServerSyncQuery {
+    pub(crate) server_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InternalServerAccessCheckQuery {
+    pub(crate) server_id: String,
+    pub(crate) steam_id64: String,
+    pub(crate) steam_id: Option<String>,
+    pub(crate) steam_id3: Option<String>,
+    pub(crate) nickname: Option<String>,
+    pub(crate) ip_address: Option<String>,
+}

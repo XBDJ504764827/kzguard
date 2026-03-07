@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::{
-    application::{auth, whitelist},
+    application::{auth, server_access, whitelist},
     domain::models::WhitelistPlayer,
     error::{AppError, AppResult},
     http::{
@@ -52,6 +52,13 @@ pub(crate) async fn create_whitelist_manual_handler(
     let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
 
     let player = whitelist::create_manual_whitelist_entry(&state.pool, draft, Some(current_admin.id)).await?;
+    server_access::refresh_all_server_access_snapshots(
+        &state.pool,
+        &state.redis,
+        &state.http_client,
+        &state.access_control,
+    )
+    .await?;
 
     Ok((
         StatusCode::CREATED,
@@ -82,6 +89,13 @@ pub(crate) async fn update_whitelist_status_handler(
         &status,
         body.note,
         Some(current_admin.id),
+    )
+    .await?;
+    server_access::refresh_all_server_access_snapshots(
+        &state.pool,
+        &state.redis,
+        &state.http_client,
+        &state.access_control,
     )
     .await?;
 

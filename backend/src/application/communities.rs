@@ -7,7 +7,7 @@ use crate::{
     http::requests::{ServerDraft, ServerSettingsDraft},
     support::{
         convert::bool_to_i32,
-        ids::prefixed_id,
+        ids::{generate_plugin_token, prefixed_id},
         rcon::{execute_rcon_command, verify_rcon_connection},
         time::{iso_to_mysql, naive_to_iso, now_iso},
         validation::{require_non_empty, validate_server_fields},
@@ -113,6 +113,7 @@ pub(crate) async fn list_communities(
                 ip: server.ip,
                 port: server.port,
                 rcon_password: server.rcon_password,
+                plugin_token: server.plugin_token,
                 rcon_verified_at: naive_to_iso(server.rcon_verified_at),
                 whitelist_enabled: server.whitelist_enabled != 0,
                 entry_verification_enabled: server.entry_verification_enabled != 0,
@@ -265,6 +266,7 @@ pub(crate) async fn create_server(
         ip: draft.ip.trim().to_string(),
         port: draft.port,
         rcon_password: draft.rcon_password,
+        plugin_token: generate_plugin_token(),
         rcon_verified_at: verified_at.clone(),
         whitelist_enabled: draft.whitelist_enabled,
         entry_verification_enabled: draft.entry_verification_enabled,
@@ -277,8 +279,8 @@ pub(crate) async fn create_server(
     sqlx::query(
         r#"
         INSERT INTO servers (
-          id, community_id, name, ip, port, rcon_password, rcon_verified_at, whitelist_enabled, entry_verification_enabled, min_entry_rating, min_steam_level
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          id, community_id, name, ip, port, rcon_password, plugin_token, rcon_verified_at, whitelist_enabled, entry_verification_enabled, min_entry_rating, min_steam_level
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&server.id)
@@ -287,6 +289,7 @@ pub(crate) async fn create_server(
     .bind(&server.ip)
     .bind(server.port)
     .bind(&server.rcon_password)
+    .bind(&server.plugin_token)
     .bind(iso_to_mysql(&server.rcon_verified_at))
     .bind(bool_to_i32(server.whitelist_enabled))
     .bind(bool_to_i32(server.entry_verification_enabled))
@@ -338,11 +341,10 @@ pub(crate) async fn update_server_settings(
         draft.min_steam_level,
     )?;
 
-    let existing_server = sqlx::query_as::<_, DbServerWithCommunity>(
+    let existing_server = sqlx::query_as::<_, DbServer>(
         r#"
-        SELECT s.id, s.name, c.name AS community_name
+        SELECT s.*
         FROM servers s
-        INNER JOIN communities c ON c.id = s.community_id
         WHERE s.id = ? AND s.community_id = ?
         "#,
     )
@@ -377,13 +379,15 @@ pub(crate) async fn update_server_settings(
 
     let snapshot = server_presence::load_server_players_snapshot(redis, server_id).await?;
 
-    let community_name = existing_server.community_name.clone();
+    let community = require_community_name(pool, community_id).await?;
+    let community_name = community.name.clone();
     let server = Server {
         id: existing_server.id,
         name: existing_server.name,
         ip: draft.ip.trim().to_string(),
         port: draft.port,
         rcon_password: draft.rcon_password,
+        plugin_token: existing_server.plugin_token,
         rcon_verified_at: verified_at,
         whitelist_enabled: draft.whitelist_enabled,
         entry_verification_enabled: draft.entry_verification_enabled,
@@ -421,6 +425,76 @@ pub(crate) async fn update_server_settings(
             } else {
                 String::new()
             }
+        ),
+        &operator,
+    )
+    .await?;
+
+    Ok(server)
+}
+
+
+pub(crate) async fn reset_server_plugin_token(
+    pool: &MySqlPool,
+    redis: &RedisClient,
+    community_id: &str,
+    server_id: &str,
+    operator_id: Option<String>,
+) -> AppResult<Server> {
+    let existing_server = sqlx::query_as::<_, DbServer>(
+        r#"
+        SELECT s.*
+          FROM servers s
+         WHERE s.id = ? AND s.community_id = ?
+        "#,
+    )
+    .bind(server_id)
+    .bind(community_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let existing_server =
+        existing_server.ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到目标服务器"))?;
+    let community = require_community_name(pool, community_id).await?;
+    let next_plugin_token = generate_plugin_token();
+
+    sqlx::query(
+        r#"
+        UPDATE servers
+           SET plugin_token = ?
+         WHERE id = ? AND community_id = ?
+        "#,
+    )
+    .bind(&next_plugin_token)
+    .bind(server_id)
+    .bind(community_id)
+    .execute(pool)
+    .await?;
+
+    let snapshot = server_presence::load_server_players_snapshot(redis, server_id).await?;
+    let server = Server {
+        id: existing_server.id,
+        name: existing_server.name,
+        ip: existing_server.ip,
+        port: existing_server.port,
+        rcon_password: existing_server.rcon_password,
+        plugin_token: next_plugin_token,
+        rcon_verified_at: naive_to_iso(existing_server.rcon_verified_at),
+        whitelist_enabled: existing_server.whitelist_enabled != 0,
+        entry_verification_enabled: existing_server.entry_verification_enabled != 0,
+        min_entry_rating: existing_server.min_entry_rating,
+        min_steam_level: existing_server.min_steam_level,
+        player_reported_at: snapshot.reported_at.clone(),
+        online_players: snapshot.players,
+    };
+
+    let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
+    append_operation_log(
+        pool,
+        "server_plugin_token_reset",
+        format!(
+            "重置了社区 “{}” 下服务器 {} 的 Plugin Token，请同步更新游戏服共享配置。",
+            community.name, server.name
         ),
         &operator,
     )

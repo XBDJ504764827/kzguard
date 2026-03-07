@@ -45,6 +45,7 @@ export interface KzGuardApi {
   verifyServerRcon: (communityId: string, draft: ServerDraft) => Promise<ServerRconVerificationResult>;
   createServer: (communityId: string, draft: ServerDraft) => Promise<Server>;
   updateServer: (communityId: string, serverId: string, draft: ServerSettingsDraft) => Promise<Server>;
+  resetServerPluginToken: (communityId: string, serverId: string) => Promise<Server>;
   deleteServer: (communityId: string, serverId: string) => Promise<void>;
   listServerPlayers: (communityId: string, serverId: string) => Promise<ServerPlayersSnapshot>;
   kickServerPlayer: (communityId: string, serverId: string, playerId: string, reason: string) => Promise<void>;

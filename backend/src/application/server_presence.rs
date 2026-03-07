@@ -32,7 +32,7 @@ pub(crate) async fn report_server_presence(
     redis: &RedisClient,
     ttl_seconds: u64,
     body: ServerPresenceReportBody,
-    provided_rcon_password: &str,
+    provided_plugin_token: &str,
 ) -> AppResult<ServerPresenceReceipt> {
     let server_id = body.server_id.trim();
     if server_id.is_empty() {
@@ -47,15 +47,15 @@ pub(crate) async fn report_server_presence(
     }
 
     let server = sqlx::query_as::<_, DbServerPresenceAuth>(
-        "SELECT id, rcon_password FROM servers WHERE id = ?",
+        "SELECT id, plugin_token FROM servers WHERE id = ?",
     )
     .bind(server_id)
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到对应服务器，请确认 serverId 配置"))?;
 
-    if server.rcon_password.trim() != provided_rcon_password.trim() {
-        return Err(AppError::http(StatusCode::UNAUTHORIZED, "服务器 RCON 校验失败"));
+    if server.plugin_token.trim() != provided_plugin_token.trim() {
+        return Err(AppError::http(StatusCode::UNAUTHORIZED, "服务器 plugin_token 校验失败"));
     }
 
     let now = now_utc();

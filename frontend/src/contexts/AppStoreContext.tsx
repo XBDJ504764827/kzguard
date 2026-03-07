@@ -65,6 +65,7 @@ interface AppStoreContextValue {
   verifyServerRcon: (communityId: string, draft: ServerDraft) => Promise<ServerRconVerificationResult>;
   addServer: (communityId: string, draft: ServerDraft) => Promise<Server>;
   updateServer: (communityId: string, serverId: string, draft: ServerSettingsDraft) => Promise<Server>;
+  resetServerPluginToken: (communityId: string, serverId: string) => Promise<Server>;
   deleteServer: (communityId: string, serverId: string) => Promise<void>;
   loadServerPlayers: (communityId: string, serverId: string) => Promise<ServerPlayersSnapshot>;
   kickServerPlayer: (communityId: string, serverId: string, playerId: string, reason: string) => Promise<void>;
@@ -95,6 +96,7 @@ const normalizeServer = (server: Server, fallback?: Partial<Server>): Server => 
   minEntryRating: server.minEntryRating ?? fallback?.minEntryRating ?? 0,
   minSteamLevel: server.minSteamLevel ?? fallback?.minSteamLevel ?? 0,
   playerReportedAt: server.playerReportedAt ?? fallback?.playerReportedAt,
+  pluginToken: server.pluginToken ?? fallback?.pluginToken ?? '',
   onlinePlayers: Array.isArray(server.onlinePlayers) ? server.onlinePlayers : fallback?.onlinePlayers ?? [],
 });
 const getBanOperatorSnapshot = (admin: WebsiteAdmin | null): BanRecordOperator => {
@@ -465,6 +467,40 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     return server;
   };
 
+  const resetServerPluginToken = async (communityId: string, serverId: string) => {
+    const community = state.communities.find((item) => item.id === communityId);
+    const currentServer = community?.servers.find((item) => item.id === serverId);
+
+    if (!community || !currentServer) {
+      throw new Error('未找到要重置 Token 的服务器');
+    }
+
+    const updatedServer = await apiService.resetServerPluginToken(communityId, serverId);
+    const server = normalizeServer(updatedServer, currentServer);
+
+    setState((currentState) => ({
+      ...currentState,
+      communities: currentState.communities.map((communityItem) => {
+        if (communityItem.id !== communityId) {
+          return communityItem;
+        }
+
+        return {
+          ...communityItem,
+          servers: communityItem.servers.map((serverItem) => (serverItem.id === serverId ? server : serverItem)),
+        };
+      }),
+    }));
+    setApiError(null);
+
+    appendOperationLog(
+      'server_plugin_token_reset',
+      `重置了社区 “${community.name}” 下服务器 ${server.name} 的 Plugin Token。`,
+    );
+
+    return server;
+  };
+
   const deleteServer = async (communityId: string, serverId: string) => {
     const community = state.communities.find((item) => item.id === communityId);
     const server = community?.servers.find((item) => item.id === serverId);
@@ -791,6 +827,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       verifyServerRcon,
       addServer,
       updateServer,
+      resetServerPluginToken,
       deleteServer,
       loadServerPlayers,
       kickServerPlayer,

@@ -131,6 +131,16 @@ export const httpApi: KzGuardApi = {
 
     return unwrap(payload);
   },
+  async resetServerPluginToken(communityId, serverId) {
+    const payload = await requestJson<ApiEnvelope<AppState['communities'][number]['servers'][number]>>(
+      `/communities/${communityId}/servers/${serverId}/plugin-token/reset`,
+      {
+        method: 'POST',
+      },
+    );
+
+    return unwrap(payload);
+  },
   async deleteServer(communityId, serverId) {
     await requestJson<{ message: string }>(`/communities/${communityId}/servers/${serverId}`, {
       method: 'DELETE',

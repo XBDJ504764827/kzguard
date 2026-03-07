@@ -28,10 +28,31 @@ pub async fn run() -> anyhow::Result<()> {
     );
     println!("redis connected to {}", config.redis.url);
 
+    let http_client = reqwest::Client::builder()
+        .user_agent("kzguard-backend/0.1.0")
+        .build()
+        .context("failed to build shared http client")?;
+
+    if let Err(error) = application::server_access::refresh_all_server_access_snapshots(
+        &pool,
+        &redis,
+        &http_client,
+        &config.access_control,
+    )
+    .await
+    {
+        eprintln!(
+            "failed to warm server access snapshots during startup: {}",
+            error
+        );
+    }
+
     let state = Arc::new(state::AppState {
         pool,
         redis,
+        http_client,
         player_presence_ttl_seconds: config.redis.player_presence_ttl_seconds,
+        access_control: config.access_control.clone(),
     });
     let app = http::build_router(state);
 

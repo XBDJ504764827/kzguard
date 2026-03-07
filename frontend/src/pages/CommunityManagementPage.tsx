@@ -57,6 +57,23 @@ const formatTime = (value: string) =>
     minute: '2-digit',
   }).format(new Date(value));
 
+const copyTextToClipboard = async (value: string) => {
+  if (globalThis.navigator?.clipboard?.writeText) {
+    await globalThis.navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textArea = document.createElement('textarea');
+  textArea.value = value;
+  textArea.setAttribute('readonly', 'true');
+  textArea.style.position = 'fixed';
+  textArea.style.opacity = '0';
+  document.body.appendChild(textArea);
+  textArea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textArea);
+};
+
 const createEmptyServerDraft = (): ServerDraft => ({
   name: '',
   ip: '',
@@ -163,6 +180,7 @@ export const CommunityManagementPage = () => {
     verifyServerRcon,
     addServer,
     updateServer,
+    resetServerPluginToken,
     deleteServer,
     loadServerPlayers,
     kickServerPlayer,
@@ -195,6 +213,7 @@ export const CommunityManagementPage = () => {
   const [submittingCommunityEdit, setSubmittingCommunityEdit] = useState(false);
   const [submittingServerSettings, setSubmittingServerSettings] = useState(false);
   const [submittingPlayerAction, setSubmittingPlayerAction] = useState(false);
+  const [resettingPluginTokenServerId, setResettingPluginTokenServerId] = useState<string | null>(null);
   const [loadingPlayerDrawer, setLoadingPlayerDrawer] = useState(false);
   const [verifyingServer, setVerifyingServer] = useState(false);
   const [serverVerification, setServerVerification] = useState<ServerVerificationState | null>(null);
@@ -604,6 +623,59 @@ export const CommunityManagementPage = () => {
     }
   };
 
+  const handleCopyServerPluginToken = async (server: Server) => {
+    const token = server.pluginToken?.trim();
+
+    if (!token) {
+      Message.warning('当前服务器暂未生成 Plugin Token');
+      return;
+    }
+
+    try {
+      await copyTextToClipboard(token);
+      Message.success(`已复制服务器 ${server.name} 的 Plugin Token`);
+    } catch (error) {
+      Message.error(getErrorMessage(error, 'Plugin Token 复制失败'));
+    }
+  };
+
+  const handleCopyServerId = async (server: Server) => {
+    const serverId = server.id?.trim();
+
+    if (!serverId) {
+      Message.warning('当前服务器 ID 无法复制');
+      return;
+    }
+
+    try {
+      await copyTextToClipboard(serverId);
+      Message.success(`已复制服务器 ${server.name} 的服务器 ID`);
+    } catch (error) {
+      Message.error(getErrorMessage(error, '服务器 ID 复制失败'));
+    }
+  };
+
+  const handleResetServerPluginToken = (community: Community, server: Server) => {
+    Modal.confirm({
+      title: '重置 Plugin Token',
+      content: `确认重置服务器“${server.name}”的 Plugin Token 吗？重置后需要同步更新对应游戏服共享配置中的 plugin_token。`,
+      okText: '确认重置',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          setResettingPluginTokenServerId(server.id);
+          await resetServerPluginToken(community.id, server.id);
+          Message.success(`服务器 ${server.name} 的 Plugin Token 已重置，请复制新的 Token 到游戏服配置`);
+        } catch (error) {
+          Message.error(getErrorMessage(error, 'Plugin Token 重置失败'));
+          throw error;
+        } finally {
+          setResettingPluginTokenServerId((currentValue) => (currentValue === server.id ? null : currentValue));
+        }
+      },
+    });
+  };
+
   const renderServerList = (community: Community, servers: Server[]) => (
     <Space direction="vertical" size="medium" style={{ width: '100%' }} className="community-server-list">
       {servers.map((server) => (
@@ -613,6 +685,9 @@ export const CommunityManagementPage = () => {
               <Space align="center" size="small" wrap>
                 <Typography.Text style={{ fontWeight: 600 }}>{server.name}</Typography.Text>
                 <Tag color="green">RCON 已验证</Tag>
+                <Tag color={server.pluginToken ? 'purple' : 'gray'}>
+                  Plugin Token{server.pluginToken ? '已生成' : '未生成'}
+                </Tag>
                 <Tag color={server.whitelistEnabled ? 'green' : 'gray'}>
                   白名单{server.whitelistEnabled ? '开启' : '关闭'}
                 </Tag>
@@ -642,11 +717,12 @@ export const CommunityManagementPage = () => {
               </Space>
 
               <Typography.Text type="secondary">{getServerAccessSummary(server)}</Typography.Text>
+              <Typography.Text type="secondary">Plugin Token 已移至“服务器设置”抽屉中进行复制和重置。</Typography.Text>
             </Space>
 
             <Space size="small" wrap>
               <Button size="small" onClick={() => openServerSettingsDrawer(community.id, server)}>
-                服务器设置
+                服务器设置 / Token
               </Button>
               <Button size="small" type="outline" onClick={() => { void openPlayerDrawer(community.id, server.id); }}>
                 玩家管理
@@ -988,6 +1064,55 @@ export const CommunityManagementPage = () => {
                 当前地址：{serverSettingsContext.server.ip}:{serverSettingsContext.server.port}
               </Tag>
             </Space>
+          ) : null}
+
+          {serverSettingsContext ? (
+            <div className="server-plugin-token-panel server-plugin-token-panel-prominent">
+              <div className="server-plugin-token-main">
+                <Typography.Text className="server-plugin-token-label">实例接入信息</Typography.Text>
+                <Typography.Text className="server-plugin-token-hint" type="secondary">
+                  游戏服共享配置中的 `server_id` 和 `plugin_token` 请使用这里的值；重置后需要同步更新服务器配置文件。
+                </Typography.Text>
+
+                <div className="server-identity-grid">
+                  <div className="server-identity-field">
+                    <Typography.Text className="server-plugin-token-label">服务器 ID</Typography.Text>
+                    <div className="server-plugin-token-value">{serverSettingsContext.server.id}</div>
+                  </div>
+                  <div className="server-identity-field">
+                    <Typography.Text className="server-plugin-token-label">Plugin Token</Typography.Text>
+                    <div className="server-plugin-token-value">{serverSettingsContext.server.pluginToken || '暂未生成 Plugin Token'}</div>
+                  </div>
+                </div>
+              </div>
+
+              <Space size="small" wrap className="server-plugin-token-actions">
+                <Button
+                  type="outline"
+                  onClick={() => {
+                    void handleCopyServerId(serverSettingsContext.server);
+                  }}
+                >
+                  复制服务器 ID
+                </Button>
+                <Button
+                  type="primary"
+                  disabled={!serverSettingsContext.server.pluginToken}
+                  onClick={() => {
+                    void handleCopyServerPluginToken(serverSettingsContext.server);
+                  }}
+                >
+                  复制 Plugin Token
+                </Button>
+                <Button
+                  type="outline"
+                  loading={resettingPluginTokenServerId === serverSettingsContext.server.id}
+                  onClick={() => handleResetServerPluginToken(serverSettingsContext.community, serverSettingsContext.server)}
+                >
+                  重置 Plugin Token
+                </Button>
+              </Space>
+            </div>
           ) : null}
 
           <Space direction="vertical" size="small" style={{ width: '100%' }}>
