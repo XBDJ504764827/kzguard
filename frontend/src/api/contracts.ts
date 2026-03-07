@@ -2,11 +2,13 @@ import type {
   ApiMode,
   AppState,
   ApplicationDraft,
+  AuthSession,
   BanRecord,
   BanRecordOperator,
   BanRecordUpdateDraft,
   BanServerPlayerDraft,
   Community,
+  LoginDraft,
   ManualBanDraft,
   ManualWhitelistDraft,
   OperationLog,
@@ -26,6 +28,9 @@ export interface ApiEnvelope<T> {
 
 export interface KzGuardApi {
   mode: ApiMode;
+  login: (draft: LoginDraft) => Promise<AuthSession>;
+  getAuthSession: () => Promise<WebsiteAdmin>;
+  logout: () => Promise<void>;
   loadState: () => Promise<AppState>;
   listWebsiteAdmins: () => Promise<WebsiteAdmin[]>;
   updateWebsiteAdmin: (adminId: string, draft: WebsiteAdminUpdateDraft) => Promise<WebsiteAdmin>;

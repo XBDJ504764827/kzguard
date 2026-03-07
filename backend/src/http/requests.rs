@@ -1,6 +1,12 @@
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct LoginBody {
+    pub(crate) username: String,
+    pub(crate) password: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct CreateCommunityBody {
     pub(crate) name: Option<String>,
 }

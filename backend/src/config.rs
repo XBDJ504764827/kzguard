@@ -5,6 +5,7 @@ pub(crate) struct Config {
     pub(crate) host: String,
     pub(crate) port: u16,
     pub(crate) mysql: MySqlConfig,
+    pub(crate) default_admin: DefaultAdminConfig,
 }
 
 #[derive(Clone)]
@@ -14,6 +15,15 @@ pub(crate) struct MySqlConfig {
     pub(crate) user: String,
     pub(crate) password: String,
     pub(crate) database: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct DefaultAdminConfig {
+    pub(crate) username: String,
+    pub(crate) password: String,
+    pub(crate) display_name: String,
+    pub(crate) email: Option<String>,
+    pub(crate) note: Option<String>,
 }
 
 pub(crate) fn load_config() -> Config {
@@ -34,5 +44,19 @@ pub(crate) fn load_config() -> Config {
         database: env::var("MYSQL_DATABASE").unwrap_or_else(|_| "text".to_string()),
     };
 
-    Config { host, port, mysql }
+    let default_admin = DefaultAdminConfig {
+        username: env::var("DEFAULT_ADMIN_USERNAME").unwrap_or_else(|_| "root_admin".to_string()),
+        password: env::var("DEFAULT_ADMIN_PASSWORD").unwrap_or_else(|_| "Admin@123".to_string()),
+        display_name: env::var("DEFAULT_ADMIN_DISPLAY_NAME")
+            .unwrap_or_else(|_| "主系统管理员".to_string()),
+        email: env::var("DEFAULT_ADMIN_EMAIL").ok().filter(|value| !value.trim().is_empty()),
+        note: env::var("DEFAULT_ADMIN_NOTE").ok().filter(|value| !value.trim().is_empty()),
+    };
+
+    Config {
+        host,
+        port,
+        mysql,
+        default_admin,
+    }
 }

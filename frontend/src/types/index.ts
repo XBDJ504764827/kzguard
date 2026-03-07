@@ -4,6 +4,11 @@ export type BanType = 'steam_account' | 'ip';
 export type BanSource = 'manual' | 'server_action';
 export type BanStatus = 'active' | 'revoked';
 
+export interface LoginDraft {
+  username: string;
+  password: string;
+}
+
 export interface ServerPlayer {
   id: string;
   nickname: string;
@@ -151,16 +156,15 @@ export interface WebsiteAdmin {
   username: string;
   displayName: string;
   role: WebsiteAdminRole;
-  password: string;
   email?: string;
   note?: string;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface WebsiteUserState {
-  currentAdminId: string;
-  admins: WebsiteAdmin[];
+export interface AuthSession {
+  token: string;
+  admin: WebsiteAdmin;
 }
 
 export interface WebsiteAdminUpdateDraft {

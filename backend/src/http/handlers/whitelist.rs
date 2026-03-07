@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::{
-    application::whitelist,
+    application::{auth, whitelist},
     domain::models::WhitelistPlayer,
     error::{AppError, AppResult},
     http::{
@@ -17,13 +17,17 @@ use crate::{
         },
     },
     state::SharedState,
-    support::web::operator_id_from_headers,
+    support::web::bearer_token_from_headers,
 };
 
 pub(crate) async fn list_whitelist_handler(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Query(query): Query<WhitelistQuery>,
 ) -> AppResult<Json<ApiEnvelope<Vec<WhitelistPlayer>>>> {
+    let token = bearer_token_from_headers(&headers);
+    let _current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
     let whitelist = whitelist::list_whitelist(&state.pool, query.status).await?;
     Ok(Json(ApiEnvelope::new(whitelist)))
 }
@@ -44,12 +48,10 @@ pub(crate) async fn create_whitelist_manual_handler(
     headers: HeaderMap,
     Json(draft): Json<ManualWhitelistDraft>,
 ) -> AppResult<impl IntoResponse> {
-    let player = whitelist::create_manual_whitelist_entry(
-        &state.pool,
-        draft,
-        operator_id_from_headers(&headers),
-    )
-    .await?;
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
+    let player = whitelist::create_manual_whitelist_entry(&state.pool, draft, Some(current_admin.id)).await?;
 
     Ok((
         StatusCode::CREATED,
@@ -71,12 +73,15 @@ pub(crate) async fn update_whitelist_status_handler(
         ));
     }
 
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
     whitelist::review_whitelist_player(
         &state.pool,
         &path.player_id,
         &status,
         body.note,
-        operator_id_from_headers(&headers),
+        Some(current_admin.id),
     )
     .await?;
 

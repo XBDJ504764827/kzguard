@@ -5,7 +5,7 @@ use axum::{
 };
 
 use crate::{
-    application::admins,
+    application::{admins, auth},
     domain::models::WebsiteAdmin,
     error::AppResult,
     http::{
@@ -13,12 +13,16 @@ use crate::{
         requests::{AdminPath, WebsiteAdminUpdateDraft},
     },
     state::SharedState,
-    support::web::operator_id_from_headers,
+    support::web::bearer_token_from_headers,
 };
 
 pub(crate) async fn list_admins_handler(
     State(state): State<SharedState>,
+    headers: HeaderMap,
 ) -> AppResult<Json<ApiEnvelope<Vec<WebsiteAdmin>>>> {
+    let token = bearer_token_from_headers(&headers);
+    let _current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
     let admins = admins::list_website_admins(&state.pool).await?;
     Ok(Json(ApiEnvelope::new(admins)))
 }
@@ -29,13 +33,10 @@ pub(crate) async fn update_admin_handler(
     headers: HeaderMap,
     Json(draft): Json<WebsiteAdminUpdateDraft>,
 ) -> AppResult<Json<ApiEnvelope<WebsiteAdmin>>> {
-    let admin = admins::update_website_admin(
-        &state.pool,
-        &path.admin_id,
-        draft,
-        operator_id_from_headers(&headers),
-    )
-    .await?;
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
+    let admin = admins::update_website_admin(&state.pool, &path.admin_id, draft, Some(current_admin.id)).await?;
 
     Ok(Json(ApiEnvelope::with_message(admin, "管理员信息已更新")))
 }

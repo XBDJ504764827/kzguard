@@ -95,6 +95,7 @@ pub(crate) struct WebsiteAdmin {
     pub(crate) username: String,
     pub(crate) display_name: String,
     pub(crate) role: String,
+    #[serde(skip_serializing)]
     pub(crate) password: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) email: Option<String>,
@@ -122,6 +123,13 @@ pub(crate) struct UserSummary {
     pub(crate) enabled: bool,
     pub(crate) message: String,
     pub(crate) planned_modules: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuthSession {
+    pub(crate) token: String,
+    pub(crate) admin: WebsiteAdmin,
 }
 
 #[derive(Debug, Clone)]

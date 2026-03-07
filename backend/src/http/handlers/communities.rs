@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::{
-    application::{bans, communities},
+    application::{auth, bans, communities},
     domain::models::{BanRecord, Community, Server},
     error::AppResult,
     http::{
@@ -17,12 +17,16 @@ use crate::{
         },
     },
     state::SharedState,
-    support::web::operator_id_from_headers,
+    support::web::bearer_token_from_headers,
 };
 
 pub(crate) async fn list_communities_handler(
     State(state): State<SharedState>,
+    headers: HeaderMap,
 ) -> AppResult<Json<ApiEnvelope<Vec<Community>>>> {
+    let token = bearer_token_from_headers(&headers);
+    let _current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
     let communities = communities::list_communities(&state.pool).await?;
     Ok(Json(ApiEnvelope::new(communities)))
 }
@@ -32,12 +36,11 @@ pub(crate) async fn create_community_handler(
     headers: HeaderMap,
     Json(body): Json<CreateCommunityBody>,
 ) -> AppResult<impl IntoResponse> {
-    let community = communities::create_community(
-        &state.pool,
-        body.name.unwrap_or_default(),
-        operator_id_from_headers(&headers),
-    )
-    .await?;
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
+    let community = communities::create_community(&state.pool, body.name.unwrap_or_default(), Some(current_admin.id))
+        .await?;
 
     Ok((
         StatusCode::CREATED,
@@ -51,11 +54,14 @@ pub(crate) async fn create_server_handler(
     headers: HeaderMap,
     Json(draft): Json<ServerDraft>,
 ) -> AppResult<impl IntoResponse> {
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
     let server = communities::create_server(
         &state.pool,
         &path.community_id,
         draft,
-        operator_id_from_headers(&headers),
+        Some(current_admin.id),
     )
     .await?;
 
@@ -71,12 +77,15 @@ pub(crate) async fn update_server_handler(
     headers: HeaderMap,
     Json(draft): Json<ServerSettingsDraft>,
 ) -> AppResult<Json<ApiEnvelope<Server>>> {
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
     let server = communities::update_server_settings(
         &state.pool,
         &path.community_id,
         &path.server_id,
         draft,
-        operator_id_from_headers(&headers),
+        Some(current_admin.id),
     )
     .await?;
 
@@ -89,13 +98,16 @@ pub(crate) async fn kick_player_handler(
     headers: HeaderMap,
     Json(body): Json<KickBody>,
 ) -> AppResult<Json<MessageResponse>> {
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
     communities::kick_server_player(
         &state.pool,
         &path.community_id,
         &path.server_id,
         &path.player_id,
         body.reason.unwrap_or_default(),
-        operator_id_from_headers(&headers),
+        Some(current_admin.id),
     )
     .await?;
 
@@ -110,13 +122,16 @@ pub(crate) async fn ban_player_handler(
     headers: HeaderMap,
     Json(draft): Json<BanServerPlayerDraft>,
 ) -> AppResult<impl IntoResponse> {
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
     let ban = bans::ban_server_player(
         &state.pool,
         &path.community_id,
         &path.server_id,
         &path.player_id,
         draft,
-        operator_id_from_headers(&headers),
+        Some(current_admin.id),
     )
     .await?;
 

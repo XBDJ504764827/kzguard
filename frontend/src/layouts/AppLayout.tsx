@@ -17,6 +17,7 @@ import {
   IconLock,
   IconMenuFold,
   IconMenuUnfold,
+  IconPoweroff,
   IconUser,
 } from '@arco-design/web-react/icon';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -36,7 +37,7 @@ const menuEntries = [
 export const AppLayout = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { theme, setTheme, apiMode, currentAdmin } = useAppStore();
+  const { theme, setTheme, apiMode, currentAdmin, logout } = useAppStore();
   const [collapsed, setCollapsed] = useState(false);
 
   const selectedKey = useMemo(() => {
@@ -91,7 +92,7 @@ export const AppLayout = () => {
               <Typography.Title heading={5} style={{ marginBottom: 0 }}>
                 KZ Guard 管理台
               </Typography.Title>
-              <Tag color="arcoblue">前端原型</Tag>
+              <Tag color="green">Rust 后端</Tag>
               <Tag color={apiMode === 'http' ? 'green' : 'orange'}>{apiMode === 'http' ? 'HTTP API' : 'Mock API'}</Tag>
             </Space>
           </Space>
@@ -115,6 +116,16 @@ export const AppLayout = () => {
               uncheckedText="Light"
               onChange={(checked) => setTheme(checked ? 'dark' : 'light')}
             />
+            <Button
+              type="outline"
+              size="small"
+              icon={<IconPoweroff />}
+              onClick={() => {
+                void logout();
+              }}
+            >
+              退出登录
+            </Button>
             <Avatar style={{ backgroundColor: '#165dff' }}>
               {currentAdmin?.displayName.slice(0, 1) ?? 'K'}
             </Avatar>

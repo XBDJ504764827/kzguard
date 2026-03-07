@@ -7,6 +7,7 @@ import {
   type PropsWithChildren,
 } from 'react';
 import { apiService } from '../api';
+import { clearStoredAuthToken, getStoredAuthToken, persistAuthToken } from '../api/authStorage';
 import type {
   ApiMode,
   AppState,
@@ -32,7 +33,6 @@ import type {
 import { banTypeLabelMap, getBanDurationLabel } from '../utils/ban';
 import { applyTheme, getPreferredTheme, persistTheme } from '../utils/theme';
 
-const CURRENT_ADMIN_STORAGE_KEY = 'kzguard-current-admin-id';
 const emptyState: AppState = {
   communities: [],
   whitelist: [],
@@ -45,13 +45,15 @@ interface AppStoreContextValue {
   apiMode: ApiMode;
   apiError: string | null;
   bootstrapping: boolean;
+  isAuthenticated: boolean;
   userSummary: UserSummary | null;
   websiteUsers: WebsiteAdmin[];
   currentAdmin: WebsiteAdmin | null;
   operationLogs: OperationLog[];
   setTheme: (theme: ThemeMode) => void;
+  login: (username: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
   refreshState: () => Promise<void>;
-  switchCurrentAdmin: (adminId: string) => void;
   updateWebsiteAdmin: (adminId: string, draft: WebsiteAdminUpdateDraft) => Promise<WebsiteAdmin>;
   addCommunity: (name: string) => Promise<Community>;
   addServer: (communityId: string, draft: ServerDraft) => Promise<Server>;
@@ -78,25 +80,6 @@ const normalizeServer = (server: Server, fallback?: Partial<Server>): Server => 
   entryVerificationEnabled: server.entryVerificationEnabled ?? fallback?.entryVerificationEnabled ?? false,
   onlinePlayers: Array.isArray(server.onlinePlayers) ? server.onlinePlayers : fallback?.onlinePlayers ?? [],
 });
-const getInitialCurrentAdminId = () => {
-  if (typeof window === 'undefined') {
-    return '';
-  }
-
-  return window.localStorage.getItem(CURRENT_ADMIN_STORAGE_KEY) ?? '';
-};
-const persistCurrentAdminId = (adminId: string) => {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  if (adminId) {
-    window.localStorage.setItem(CURRENT_ADMIN_STORAGE_KEY, adminId);
-    return;
-  }
-
-  window.localStorage.removeItem(CURRENT_ADMIN_STORAGE_KEY);
-};
 const getBanOperatorSnapshot = (admin: WebsiteAdmin | null): BanRecordOperator => {
   if (!admin) {
     throw new Error('当前没有登录管理员');
@@ -116,24 +99,38 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
   const [bootstrapping, setBootstrapping] = useState(true);
   const [userSummary, setUserSummary] = useState<UserSummary | null>(null);
   const [websiteUsers, setWebsiteUsers] = useState<WebsiteAdmin[]>([]);
-  const [currentAdminId, setCurrentAdminId] = useState(getInitialCurrentAdminId);
+  const [currentAdmin, setCurrentAdmin] = useState<WebsiteAdmin | null>(null);
   const [operationLogs, setOperationLogs] = useState<OperationLog[]>([]);
+  const [authToken, setAuthToken] = useState(getStoredAuthToken);
 
   useEffect(() => {
     applyTheme(theme);
     persistTheme(theme);
   }, [theme]);
 
-  const currentAdmin = useMemo(
-    () => websiteUsers.find((admin) => admin.id === currentAdminId) ?? websiteUsers[0] ?? null,
-    [currentAdminId, websiteUsers],
-  );
+  const clearProtectedState = () => {
+    setState(emptyState);
+    setUserSummary(null);
+    setWebsiteUsers([]);
+    setCurrentAdmin(null);
+    setOperationLogs([]);
+  };
 
-  useEffect(() => {
-    const nextAdminId = currentAdmin?.id ?? '';
-    setCurrentAdminId((previousId) => (previousId === nextAdminId ? previousId : nextAdminId));
-    persistCurrentAdminId(nextAdminId);
-  }, [currentAdmin]);
+  const hydrateProtectedState = async (activeAdmin: WebsiteAdmin | null) => {
+    const [nextState, nextUserSummary, nextAdmins, nextOperationLogs] = await Promise.all([
+      apiService.loadState(),
+      apiService.getUsersSummary().catch(() => null),
+      apiService.listWebsiteAdmins(),
+      apiService.listOperationLogs(),
+    ]);
+
+    setState(nextState);
+    setUserSummary(nextUserSummary);
+    setWebsiteUsers(nextAdmins);
+    setOperationLogs(nextOperationLogs);
+    setCurrentAdmin(nextAdmins.find((admin) => admin.id === activeAdmin?.id) ?? activeAdmin ?? nextAdmins[0] ?? null);
+    setApiError(null);
+  };
 
   const appendOperationLog = (action: OperationLogAction, detail: string, operator = currentAdmin) => {
     if (!operator) {
@@ -156,6 +153,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
   const refreshState = async () => {
     const nextState = await apiService.loadState();
     setState(nextState);
+    setApiError(null);
   };
 
   useEffect(() => {
@@ -164,36 +162,32 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     const bootstrap = async () => {
       setBootstrapping(true);
 
+      if (!authToken) {
+        if (mounted) {
+          clearProtectedState();
+          setApiError(null);
+          setBootstrapping(false);
+        }
+        return;
+      }
+
       try {
-        const [nextState, nextUserSummary, nextAdmins, nextOperationLogs] = await Promise.all([
-          apiService.loadState(),
-          apiService.getUsersSummary().catch(() => null),
-          apiService.listWebsiteAdmins(),
-          apiService.listOperationLogs(),
-        ]);
+        const nextAdmin = await apiService.getAuthSession();
 
         if (!mounted) {
           return;
         }
 
-        setState(nextState);
-        setUserSummary(nextUserSummary);
-        setWebsiteUsers(nextAdmins);
-        setOperationLogs(nextOperationLogs);
-        setCurrentAdminId((currentId) => {
-          if (nextAdmins.some((admin) => admin.id === currentId)) {
-            return currentId;
-          }
-
-          return nextAdmins[0]?.id ?? '';
-        });
-        setApiError(null);
+        await hydrateProtectedState(nextAdmin);
       } catch (error) {
         if (!mounted) {
           return;
         }
 
-        setApiError(error instanceof Error ? error.message : '接口初始化失败');
+        clearStoredAuthToken();
+        setAuthToken('');
+        clearProtectedState();
+        setApiError(error instanceof Error ? error.message : '登录状态已失效，请重新登录');
       } finally {
         if (mounted) {
           setBootstrapping(false);
@@ -212,18 +206,50 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     setThemeState(nextTheme);
   };
 
-  const switchCurrentAdmin = (adminId: string) => {
-    if (!websiteUsers.some((admin) => admin.id === adminId)) {
-      return;
+  const login = async (username: string, password: string) => {
+    setBootstrapping(true);
+
+    try {
+      const session = await apiService.login({
+        username: username.trim(),
+        password,
+      });
+
+      persistAuthToken(session.token);
+      setAuthToken(session.token);
+      await hydrateProtectedState(session.admin);
+      setApiError(null);
+    } catch (error) {
+      clearStoredAuthToken();
+      setAuthToken('');
+      clearProtectedState();
+      setApiError(error instanceof Error ? error.message : '登录失败');
+      throw error;
+    } finally {
+      setBootstrapping(false);
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await apiService.logout();
+    } catch {
+      // ignore logout errors locally and always clear session state
     }
 
-    setCurrentAdminId(adminId);
+    clearStoredAuthToken();
+    setAuthToken('');
+    clearProtectedState();
+    setApiError(null);
   };
 
   const updateWebsiteAdmin = async (adminId: string, draft: WebsiteAdminUpdateDraft) => {
     const updatedAdmin = await apiService.updateWebsiteAdmin(adminId, draft);
 
     setWebsiteUsers((currentAdmins) => currentAdmins.map((admin) => (admin.id === adminId ? updatedAdmin : admin)));
+    if (currentAdmin?.id === adminId) {
+      setCurrentAdmin(updatedAdmin);
+    }
     setApiError(null);
 
     appendOperationLog(
@@ -584,13 +610,15 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       apiMode: apiService.mode,
       apiError,
       bootstrapping,
+      isAuthenticated: Boolean(authToken && currentAdmin),
       userSummary,
       websiteUsers,
       currentAdmin,
       operationLogs,
       setTheme,
+      login,
+      logout,
       refreshState,
-      switchCurrentAdmin,
       updateWebsiteAdmin,
       addCommunity,
       addServer,
@@ -606,7 +634,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       manualAddPlayer,
       simulateApplication,
     }),
-    [apiError, bootstrapping, currentAdmin, operationLogs, state, theme, userSummary, websiteUsers],
+    [apiError, authToken, bootstrapping, currentAdmin, operationLogs, state, theme, userSummary, websiteUsers],
   );
 
   return <AppStoreContext.Provider value={value}>{children}</AppStoreContext.Provider>;

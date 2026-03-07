@@ -1,10 +1,12 @@
 import type {
   AppState,
   ApplicationDraft,
+  AuthSession,
   BanRecord,
   BanRecordOperator,
   BanRecordUpdateDraft,
   BanServerPlayerDraft,
+  LoginDraft,
   ManualBanDraft,
   ManualWhitelistDraft,
   OperationLog,
@@ -21,6 +23,23 @@ const unwrap = <T,>(payload: ApiEnvelope<T>) => payload.data;
 
 export const httpApi: KzGuardApi = {
   mode: 'http',
+  async login(draft: LoginDraft) {
+    const payload = await requestJson<ApiEnvelope<AuthSession>>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(draft),
+    });
+
+    return unwrap(payload);
+  },
+  async getAuthSession() {
+    const payload = await requestJson<ApiEnvelope<WebsiteAdmin>>('/auth/session');
+    return unwrap(payload);
+  },
+  async logout() {
+    await requestJson<{ message: string }>('/auth/logout', {
+      method: 'POST',
+    });
+  },
   async loadState() {
     const [communitiesPayload, whitelistPayload, bansPayload] = await Promise.all([
       requestJson<ApiEnvelope<AppState['communities']>>('/communities'),

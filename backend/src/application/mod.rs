@@ -1,3 +1,4 @@
+pub(crate) mod auth;
 pub(crate) mod admins;
 pub(crate) mod bans;
 pub(crate) mod communities;

@@ -25,6 +25,9 @@ pub(crate) fn build_router(state: SharedState) -> Router {
 
     Router::new()
         .route("/api/health", get(health_handler))
+        .route("/api/auth/login", post(login_handler))
+        .route("/api/auth/session", get(auth_session_handler))
+        .route("/api/auth/logout", post(logout_handler))
         .route(
             "/api/communities",
             get(list_communities_handler).post(create_community_handler),

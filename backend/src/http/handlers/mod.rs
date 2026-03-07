@@ -1,3 +1,4 @@
+pub(crate) mod auth;
 pub(crate) mod admins;
 pub(crate) mod bans;
 pub(crate) mod communities;
@@ -22,3 +23,5 @@ pub(crate) use whitelist::{
     create_whitelist_application_handler, create_whitelist_manual_handler, list_whitelist_handler,
     update_whitelist_status_handler,
 };
+
+pub(crate) use auth::{auth_session_handler, login_handler, logout_handler};

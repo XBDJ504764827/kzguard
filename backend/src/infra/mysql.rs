@@ -26,6 +26,7 @@ pub(crate) async fn init_database(config: &Config) -> AppResult<MySqlPool> {
 
     create_tables(&pool).await?;
     seed_if_empty(&pool).await?;
+    crate::application::auth::ensure_default_system_admin(&pool, &config.default_admin).await?;
 
     Ok(pool)
 }
@@ -174,6 +175,25 @@ pub(crate) async fn create_tables(pool: &MySqlPool) -> AppResult<()> {
           action VARCHAR(64) NOT NULL,
           detail TEXT NOT NULL,
           INDEX idx_operation_logs_created_at (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        "#,
+    )
+    .await?;
+
+    pool.execute(
+        r#"
+        CREATE TABLE IF NOT EXISTS admin_sessions (
+          id VARCHAR(64) PRIMARY KEY,
+          admin_id VARCHAR(64) NOT NULL,
+          token VARCHAR(128) NOT NULL UNIQUE,
+          created_at DATETIME(3) NOT NULL,
+          expires_at DATETIME(3) NOT NULL,
+          revoked_at DATETIME(3) NULL,
+          user_agent VARCHAR(512) NULL,
+          ip_address VARCHAR(45) NULL,
+          CONSTRAINT fk_admin_sessions_admin FOREIGN KEY (admin_id) REFERENCES website_admins(id) ON DELETE CASCADE,
+          INDEX idx_admin_sessions_admin_id (admin_id),
+          INDEX idx_admin_sessions_expires_at (expires_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         "#,
     )

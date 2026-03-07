@@ -47,7 +47,7 @@ const formatTime = (value: string) =>
   }).format(new Date(value));
 
 export const UsersPlaceholderPage = () => {
-  const { websiteUsers, currentAdmin, switchCurrentAdmin, updateWebsiteAdmin, apiMode } = useAppStore();
+  const { websiteUsers, currentAdmin, updateWebsiteAdmin, apiMode } = useAppStore();
   const [editVisible, setEditVisible] = useState(false);
   const [editingAdminId, setEditingAdminId] = useState<string | null>(null);
   const [draft, setDraft] = useState<WebsiteAdminUpdateDraft | null>(null);
@@ -61,7 +61,7 @@ export const UsersPlaceholderPage = () => {
   );
 
   const currentAdminRecord = useMemo(
-    () => websiteUsers.find((admin) => admin.id === currentAdmin?.id) ?? null,
+    () => websiteUsers.find((admin) => admin.id === currentAdmin?.id) ?? currentAdmin ?? null,
     [currentAdmin, websiteUsers],
   );
 
@@ -145,14 +145,14 @@ export const UsersPlaceholderPage = () => {
           网站用户
         </Typography.Title>
         <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          当前已实现管理员角色原型：系统管理员可编辑全部管理员资料，普通管理员仅可编辑自己的用户名、密码和个人信息。
+          当前已接入真实登录态：系统管理员可编辑全部管理员资料，普通管理员仅可编辑自己的用户名、密码和个人信息。
         </Typography.Paragraph>
       </div>
 
       <Alert
         type="info"
         showIcon
-        content={`当前管理员列表与资料来自后端真实数据；由于登录系统尚未开发，仍可通过演示账号切换器预览不同角色权限。当前接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}。`}
+        content={`当前管理员资料与权限来自 Rust 后端真实数据。当前接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}。`}
       />
 
       {!isSystemAdmin ? (
@@ -165,35 +165,22 @@ export const UsersPlaceholderPage = () => {
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
-          <Card title="当前演示账号">
-            <Space direction="vertical" size="medium" style={{ width: '100%' }}>
-              <Typography.Text type="secondary">
-                由于登录系统尚未开发，这里提供账号切换器用于预览系统管理员与普通管理员的前端权限差异。
-              </Typography.Text>
-              <Select
-                value={currentAdmin?.id}
-                placeholder="请选择演示账号"
-                onChange={(value) => switchCurrentAdmin(value)}
-              >
-                {websiteUsers.map((admin) => (
-                  <Option key={admin.id} value={admin.id}>
-                    {admin.displayName}（{websiteAdminRoleLabelMap[admin.role]}）
-                  </Option>
-                ))}
-              </Select>
-              {currentAdmin ? (
-                <Space direction="vertical" size="small">
-                  <Space size="small" wrap>
-                    <Typography.Text style={{ fontWeight: 600 }}>{currentAdmin.displayName}</Typography.Text>
-                    <Tag color={websiteAdminRoleColorMap[currentAdmin.role]}>
-                      {websiteAdminRoleLabelMap[currentAdmin.role]}
-                    </Tag>
-                  </Space>
-                  <Typography.Text type="secondary">用户名：{currentAdmin.username}</Typography.Text>
-                  <Typography.Text type="secondary">联系信息：{currentAdmin.email || '-'}</Typography.Text>
+          <Card title="当前登录账号">
+            {currentAdmin ? (
+              <Space direction="vertical" size="medium" style={{ width: '100%' }}>
+                <Space size="small" wrap>
+                  <Typography.Text style={{ fontWeight: 600 }}>{currentAdmin.displayName}</Typography.Text>
+                  <Tag color={websiteAdminRoleColorMap[currentAdmin.role]}>
+                    {websiteAdminRoleLabelMap[currentAdmin.role]}
+                  </Tag>
                 </Space>
-              ) : null}
-            </Space>
+                <Typography.Text type="secondary">用户名：{currentAdmin.username}</Typography.Text>
+                <Typography.Text type="secondary">联系信息：{currentAdmin.email || '-'}</Typography.Text>
+                <Typography.Text type="secondary">备注：{currentAdmin.note || '-'}</Typography.Text>
+              </Space>
+            ) : (
+              <Typography.Text type="secondary">当前没有已登录管理员。</Typography.Text>
+            )}
           </Card>
         </Col>
 
@@ -283,11 +270,7 @@ export const UsersPlaceholderPage = () => {
       </Row>
 
       <Modal
-        title={
-          editingAdminId && currentAdmin?.id === editingAdminId
-            ? '编辑我的信息'
-            : '编辑管理员信息'
-        }
+        title={editingAdminId && currentAdmin?.id === editingAdminId ? '编辑我的信息' : '编辑管理员信息'}
         visible={editVisible}
         confirmLoading={submitting}
         onOk={() => {
