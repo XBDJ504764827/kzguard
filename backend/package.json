@@ -2,20 +2,9 @@
   "name": "backend",
   "private": true,
   "version": "0.1.0",
-  "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js"
-  },
-  "dependencies": {
-    "@fastify/cors": "^11.0.0",
-    "fastify": "^5.2.1",
-    "mysql2": "^3.19.0"
-  },
-  "devDependencies": {
-    "@types/node": "^24.3.0",
-    "tsx": "^4.19.4",
-    "typescript": "^5.8.2"
+    "dev": "cargo run",
+    "build": "cargo build",
+    "start": "cargo run --release"
   }
 }
