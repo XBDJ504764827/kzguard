@@ -7,8 +7,6 @@ import {
   type PropsWithChildren,
 } from 'react';
 import { apiService } from '../api';
-import { initialOperationLogs, initialWebsiteUserState } from '../data/adminMockData';
-import { initialState } from '../data/mockData';
 import type {
   ApiMode,
   AppState,
@@ -29,14 +27,17 @@ import type {
   UserSummary,
   WebsiteAdmin,
   WebsiteAdminUpdateDraft,
-  WebsiteUserState,
   WhitelistPlayer,
 } from '../types';
 import { banTypeLabelMap, getBanDurationLabel } from '../utils/ban';
 import { applyTheme, getPreferredTheme, persistTheme } from '../utils/theme';
 
-const WEBSITE_USER_STORAGE_KEY = 'kzguard-website-user-state-v1';
-const OPERATION_LOG_STORAGE_KEY = 'kzguard-operation-logs-v1';
+const CURRENT_ADMIN_STORAGE_KEY = 'kzguard-current-admin-id';
+const emptyState: AppState = {
+  communities: [],
+  whitelist: [],
+  bans: [],
+};
 
 interface AppStoreContextValue {
   state: AppState;
@@ -69,7 +70,6 @@ interface AppStoreContextValue {
 
 const AppStoreContext = createContext<AppStoreContextValue | null>(null);
 
-const clone = <T,>(value: T): T => structuredClone(value);
 const createId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
 const normalizeText = (value?: string) => value?.trim() || undefined;
 const normalizeServer = (server: Server, fallback?: Partial<Server>): Server => ({
@@ -78,6 +78,25 @@ const normalizeServer = (server: Server, fallback?: Partial<Server>): Server => 
   entryVerificationEnabled: server.entryVerificationEnabled ?? fallback?.entryVerificationEnabled ?? false,
   onlinePlayers: Array.isArray(server.onlinePlayers) ? server.onlinePlayers : fallback?.onlinePlayers ?? [],
 });
+const getInitialCurrentAdminId = () => {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  return window.localStorage.getItem(CURRENT_ADMIN_STORAGE_KEY) ?? '';
+};
+const persistCurrentAdminId = (adminId: string) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  if (adminId) {
+    window.localStorage.setItem(CURRENT_ADMIN_STORAGE_KEY, adminId);
+    return;
+  }
+
+  window.localStorage.removeItem(CURRENT_ADMIN_STORAGE_KEY);
+};
 const getBanOperatorSnapshot = (admin: WebsiteAdmin | null): BanRecordOperator => {
   if (!admin) {
     throw new Error('当前没有登录管理员');
@@ -90,105 +109,31 @@ const getBanOperatorSnapshot = (admin: WebsiteAdmin | null): BanRecordOperator =
   };
 };
 
-const getInitialWebsiteUserState = (): WebsiteUserState => {
-  if (typeof window === 'undefined') {
-    return clone(initialWebsiteUserState);
-  }
-
-  const storedState = window.localStorage.getItem(WEBSITE_USER_STORAGE_KEY);
-
-  if (!storedState) {
-    return clone(initialWebsiteUserState);
-  }
-
-  try {
-    const parsedState = JSON.parse(storedState) as WebsiteUserState;
-
-    if (!Array.isArray(parsedState.admins) || !parsedState.admins.length) {
-      return clone(initialWebsiteUserState);
-    }
-
-    return parsedState;
-  } catch {
-    return clone(initialWebsiteUserState);
-  }
-};
-
-const getInitialOperationLogs = (): OperationLog[] => {
-  if (typeof window === 'undefined') {
-    return clone(initialOperationLogs);
-  }
-
-  const storedLogs = window.localStorage.getItem(OPERATION_LOG_STORAGE_KEY);
-
-  if (!storedLogs) {
-    return clone(initialOperationLogs);
-  }
-
-  try {
-    const parsedLogs = JSON.parse(storedLogs) as OperationLog[];
-    return Array.isArray(parsedLogs) ? parsedLogs : clone(initialOperationLogs);
-  } catch {
-    return clone(initialOperationLogs);
-  }
-};
-
-const persistWebsiteUsers = (state: WebsiteUserState) => {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  window.localStorage.setItem(WEBSITE_USER_STORAGE_KEY, JSON.stringify(state));
-};
-
-const persistOperationLogs = (logs: OperationLog[]) => {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  window.localStorage.setItem(OPERATION_LOG_STORAGE_KEY, JSON.stringify(logs));
-};
-
 export const AppStoreProvider = ({ children }: PropsWithChildren) => {
-  const [state, setState] = useState<AppState>(initialState);
+  const [state, setState] = useState<AppState>(emptyState);
   const [theme, setThemeState] = useState<ThemeMode>(getPreferredTheme);
   const [apiError, setApiError] = useState<string | null>(null);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [userSummary, setUserSummary] = useState<UserSummary | null>(null);
-  const [websiteUserState, setWebsiteUserState] = useState<WebsiteUserState>(getInitialWebsiteUserState);
-  const [operationLogs, setOperationLogs] = useState<OperationLog[]>(getInitialOperationLogs);
+  const [websiteUsers, setWebsiteUsers] = useState<WebsiteAdmin[]>([]);
+  const [currentAdminId, setCurrentAdminId] = useState(getInitialCurrentAdminId);
+  const [operationLogs, setOperationLogs] = useState<OperationLog[]>([]);
 
   useEffect(() => {
     applyTheme(theme);
     persistTheme(theme);
   }, [theme]);
 
-  useEffect(() => {
-    persistWebsiteUsers(websiteUserState);
-  }, [websiteUserState]);
-
-  useEffect(() => {
-    persistOperationLogs(operationLogs);
-  }, [operationLogs]);
-
   const currentAdmin = useMemo(
-    () =>
-      websiteUserState.admins.find((admin) => admin.id === websiteUserState.currentAdminId) ??
-      websiteUserState.admins[0] ??
-      null,
-    [websiteUserState],
+    () => websiteUsers.find((admin) => admin.id === currentAdminId) ?? websiteUsers[0] ?? null,
+    [currentAdminId, websiteUsers],
   );
 
   useEffect(() => {
-    if (!currentAdmin || currentAdmin.id === websiteUserState.currentAdminId) {
-      return;
-    }
-
-    setWebsiteUserState((currentState) => ({
-      ...currentState,
-      currentAdminId: currentAdmin.id,
-    }));
-  }, [currentAdmin, websiteUserState.currentAdminId]);
+    const nextAdminId = currentAdmin?.id ?? '';
+    setCurrentAdminId((previousId) => (previousId === nextAdminId ? previousId : nextAdminId));
+    persistCurrentAdminId(nextAdminId);
+  }, [currentAdmin]);
 
   const appendOperationLog = (action: OperationLogAction, detail: string, operator = currentAdmin) => {
     if (!operator) {
@@ -220,9 +165,11 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       setBootstrapping(true);
 
       try {
-        const [nextState, nextUserSummary] = await Promise.all([
+        const [nextState, nextUserSummary, nextAdmins, nextOperationLogs] = await Promise.all([
           apiService.loadState(),
           apiService.getUsersSummary().catch(() => null),
+          apiService.listWebsiteAdmins(),
+          apiService.listOperationLogs(),
         ]);
 
         if (!mounted) {
@@ -231,6 +178,15 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
 
         setState(nextState);
         setUserSummary(nextUserSummary);
+        setWebsiteUsers(nextAdmins);
+        setOperationLogs(nextOperationLogs);
+        setCurrentAdminId((currentId) => {
+          if (nextAdmins.some((admin) => admin.id === currentId)) {
+            return currentId;
+          }
+
+          return nextAdmins[0]?.id ?? '';
+        });
         setApiError(null);
       } catch (error) {
         if (!mounted) {
@@ -257,93 +213,24 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
   };
 
   const switchCurrentAdmin = (adminId: string) => {
-    setWebsiteUserState((currentState) => {
-      if (!currentState.admins.some((admin) => admin.id === adminId)) {
-        return currentState;
-      }
+    if (!websiteUsers.some((admin) => admin.id === adminId)) {
+      return;
+    }
 
-      return {
-        ...currentState,
-        currentAdminId: adminId,
-      };
-    });
+    setCurrentAdminId(adminId);
   };
 
   const updateWebsiteAdmin = async (adminId: string, draft: WebsiteAdminUpdateDraft) => {
-    if (!currentAdmin) {
-      throw new Error('当前没有登录管理员');
-    }
+    const updatedAdmin = await apiService.updateWebsiteAdmin(adminId, draft);
 
-    const targetAdmin = websiteUserState.admins.find((admin) => admin.id === adminId);
-
-    if (!targetAdmin) {
-      throw new Error('未找到目标管理员');
-    }
-
-    const isSelfEdit = currentAdmin.id === adminId;
-    const isSystemAdmin = currentAdmin.role === 'system_admin';
-
-    if (!isSystemAdmin && !isSelfEdit) {
-      throw new Error('普通管理员只能编辑自己的信息');
-    }
-
-    const nextUsername = draft.username.trim();
-    const nextDisplayName = draft.displayName.trim();
-    const nextEmail = normalizeText(draft.email);
-    const nextNote = normalizeText(draft.note);
-    const nextPassword = draft.password.trim() ? draft.password.trim() : targetAdmin.password;
-    const nextRole = isSystemAdmin ? draft.role : targetAdmin.role;
-
-    if (!nextUsername) {
-      throw new Error('请输入用户名');
-    }
-
-    if (!nextDisplayName) {
-      throw new Error('请输入管理员名称');
-    }
-
-    if (nextPassword.length < 6) {
-      throw new Error('密码至少需要 6 位');
-    }
-
-    const hasDuplicateUsername = websiteUserState.admins.some(
-      (admin) => admin.id !== adminId && admin.username.toLowerCase() === nextUsername.toLowerCase(),
-    );
-
-    if (hasDuplicateUsername) {
-      throw new Error('用户名已存在，请更换其他用户名');
-    }
-
-    const remainingSystemAdminCount = websiteUserState.admins.filter(
-      (admin) => admin.id !== adminId && admin.role === 'system_admin',
-    ).length;
-
-    if (targetAdmin.role === 'system_admin' && nextRole !== 'system_admin' && remainingSystemAdminCount === 0) {
-      throw new Error('系统中至少需要保留一名系统管理员');
-    }
-
-    const updatedAdmin: WebsiteAdmin = {
-      ...targetAdmin,
-      username: nextUsername,
-      displayName: nextDisplayName,
-      password: nextPassword,
-      email: nextEmail,
-      note: nextNote,
-      role: nextRole,
-      updatedAt: new Date().toISOString(),
-    };
-
-    setWebsiteUserState((currentState) => ({
-      ...currentState,
-      admins: currentState.admins.map((admin) => (admin.id === adminId ? updatedAdmin : admin)),
-      currentAdminId: isSelfEdit ? updatedAdmin.id : currentState.currentAdminId,
-    }));
+    setWebsiteUsers((currentAdmins) => currentAdmins.map((admin) => (admin.id === adminId ? updatedAdmin : admin)));
+    setApiError(null);
 
     appendOperationLog(
       'admin_profile_updated',
-      isSelfEdit
+      currentAdmin?.id === adminId
         ? `修改了自己的管理员资料，当前用户名为 ${updatedAdmin.username}。`
-        : `修改了管理员 ${targetAdmin.displayName} 的资料，当前用户名为 ${updatedAdmin.username}。`,
+        : `修改了管理员 ${updatedAdmin.displayName} 的资料，当前用户名为 ${updatedAdmin.username}。`,
     );
 
     return updatedAdmin;
@@ -551,15 +438,19 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       throw new Error('未找到要编辑的封禁记录');
     }
 
-    const updatedBan = await apiService.updateBanRecord(banId, {
-      ...draft,
-      nickname: normalizeText(draft.nickname),
-      steamIdentifier: draft.steamIdentifier.trim(),
-      ipAddress: normalizeText(draft.ipAddress),
-      reason: draft.reason.trim(),
-      serverName: normalizeText(draft.serverName),
-      communityName: normalizeText(draft.communityName),
-    }, getBanOperatorSnapshot(currentAdmin));
+    const updatedBan = await apiService.updateBanRecord(
+      banId,
+      {
+        ...draft,
+        nickname: normalizeText(draft.nickname),
+        steamIdentifier: draft.steamIdentifier.trim(),
+        ipAddress: normalizeText(draft.ipAddress),
+        reason: draft.reason.trim(),
+        serverName: normalizeText(draft.serverName),
+        communityName: normalizeText(draft.communityName),
+      },
+      getBanOperatorSnapshot(currentAdmin),
+    );
 
     setState((currentState) => ({
       ...currentState,
@@ -694,7 +585,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       apiError,
       bootstrapping,
       userSummary,
-      websiteUsers: websiteUserState.admins,
+      websiteUsers,
       currentAdmin,
       operationLogs,
       setTheme,
@@ -715,7 +606,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       manualAddPlayer,
       simulateApplication,
     }),
-    [apiError, bootstrapping, currentAdmin, operationLogs, state, theme, userSummary, websiteUserState.admins],
+    [apiError, bootstrapping, currentAdmin, operationLogs, state, theme, userSummary, websiteUsers],
   );
 
   return <AppStoreContext.Provider value={value}>{children}</AppStoreContext.Provider>;

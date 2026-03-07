@@ -9,10 +9,13 @@ import type {
   Community,
   ManualBanDraft,
   ManualWhitelistDraft,
+  OperationLog,
   Server,
   ServerDraft,
   ServerSettingsDraft,
   UserSummary,
+  WebsiteAdmin,
+  WebsiteAdminUpdateDraft,
   WhitelistPlayer,
 } from '../types';
 
@@ -24,6 +27,9 @@ export interface ApiEnvelope<T> {
 export interface KzGuardApi {
   mode: ApiMode;
   loadState: () => Promise<AppState>;
+  listWebsiteAdmins: () => Promise<WebsiteAdmin[]>;
+  updateWebsiteAdmin: (adminId: string, draft: WebsiteAdminUpdateDraft) => Promise<WebsiteAdmin>;
+  listOperationLogs: () => Promise<OperationLog[]>;
   createCommunity: (name: string) => Promise<Community>;
   createServer: (communityId: string, draft: ServerDraft) => Promise<Server>;
   updateServer: (communityId: string, serverId: string, draft: ServerSettingsDraft) => Promise<Server>;

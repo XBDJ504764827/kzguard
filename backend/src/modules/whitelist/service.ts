@@ -1,25 +1,35 @@
 import { randomUUID } from 'node:crypto';
-import { appStore } from '../../store/appStore.js';
-import { HttpError } from '../../utils/errors.js';
-import { validateApplicationDraft, validateManualWhitelistDraft } from '../../utils/validation.js';
+import type { RowDataPacket } from 'mysql2/promise';
+import { execute, mapWhitelistRows, queryRows } from '../../db/mysql.js';
 import type {
   ApplicationDraft,
   ManualWhitelistDraft,
   WhitelistPlayerRecord,
-  WhitelistStatus
+  WhitelistStatus,
 } from '../../types/index.js';
+import { HttpError } from '../../utils/errors.js';
+import { validateApplicationDraft, validateManualWhitelistDraft } from '../../utils/validation.js';
+import { getOperatorSnapshot } from '../admins/service.js';
+import { appendOperationLog } from '../operation-logs/service.js';
 
-export const listWhitelist = (status?: WhitelistStatus) => {
-  const whitelist = appStore.getState().whitelist;
+const toMySqlDateTime = (value: string) => value.slice(0, 23).replace('T', ' ');
 
-  if (!status) {
-    return whitelist;
+export const listWhitelist = async (status?: WhitelistStatus) => {
+  const params: unknown[] = [];
+  let sql = 'SELECT * FROM whitelist_players';
+
+  if (status) {
+    sql += ' WHERE status = ?';
+    params.push(status);
   }
 
-  return whitelist.filter((player) => player.status === status);
+  sql += ' ORDER BY applied_at DESC';
+
+  const rows = await queryRows<RowDataPacket[]>(sql, params);
+  return mapWhitelistRows(rows);
 };
 
-export const createApplication = (draft: ApplicationDraft): WhitelistPlayerRecord => {
+export const createApplication = async (draft: ApplicationDraft): Promise<WhitelistPlayerRecord> => {
   validateApplicationDraft(draft);
 
   const player: WhitelistPlayerRecord = {
@@ -30,18 +40,33 @@ export const createApplication = (draft: ApplicationDraft): WhitelistPlayerRecor
     note: draft.note?.trim() || undefined,
     status: 'pending',
     source: 'application',
-    appliedAt: new Date().toISOString()
+    appliedAt: new Date().toISOString(),
   };
 
-  appStore.update((currentState) => ({
-    ...currentState,
-    whitelist: [player, ...currentState.whitelist]
-  }));
+  await execute(
+    `INSERT INTO whitelist_players (
+      id, nickname, steam_id, contact, note, status, source, applied_at, reviewed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      player.id,
+      player.nickname,
+      player.steamId,
+      player.contact ?? null,
+      player.note ?? null,
+      player.status,
+      player.source,
+      toMySqlDateTime(player.appliedAt),
+      null,
+    ],
+  );
 
   return player;
 };
 
-export const createManualWhitelistEntry = (draft: ManualWhitelistDraft): WhitelistPlayerRecord => {
+export const createManualWhitelistEntry = async (
+  draft: ManualWhitelistDraft,
+  operatorId?: string,
+): Promise<WhitelistPlayerRecord> => {
   validateManualWhitelistDraft(draft);
 
   const now = new Date().toISOString();
@@ -54,38 +79,59 @@ export const createManualWhitelistEntry = (draft: ManualWhitelistDraft): Whiteli
     status: draft.status,
     source: 'manual',
     appliedAt: now,
-    reviewedAt: now
+    reviewedAt: now,
   };
 
-  appStore.update((currentState) => ({
-    ...currentState,
-    whitelist: [player, ...currentState.whitelist]
-  }));
+  await execute(
+    `INSERT INTO whitelist_players (
+      id, nickname, steam_id, contact, note, status, source, applied_at, reviewed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      player.id,
+      player.nickname,
+      player.steamId,
+      player.contact ?? null,
+      player.note ?? null,
+      player.status,
+      player.source,
+      toMySqlDateTime(player.appliedAt),
+      toMySqlDateTime(player.reviewedAt ?? now),
+    ],
+  );
+
+  await appendOperationLog(
+    'whitelist_manual_added',
+    `手动录入玩家 ${player.nickname} 到白名单，结果为 ${player.status === 'approved' ? '已通过' : '已拒绝'}。`,
+    await getOperatorSnapshot(operatorId),
+  );
 
   return player;
 };
 
-export const reviewPlayer = (playerId: string, status: Extract<WhitelistStatus, 'approved' | 'rejected'>, note?: string) => {
-  const currentState = appStore.getState();
-  const existingPlayer = currentState.whitelist.find((player) => player.id === playerId);
+export const reviewPlayer = async (
+  playerId: string,
+  status: Extract<WhitelistStatus, 'approved' | 'rejected'>,
+  note?: string,
+  operatorId?: string,
+) => {
+  const existingRows = await queryRows<RowDataPacket[]>('SELECT * FROM whitelist_players WHERE id = ?', [playerId]);
+  const existingPlayer = mapWhitelistRows(existingRows)[0];
 
   if (!existingPlayer) {
     throw new HttpError(404, '未找到目标玩家');
   }
 
-  appStore.update((state) => ({
-    ...state,
-    whitelist: state.whitelist.map((player) => {
-      if (player.id !== playerId) {
-        return player;
-      }
+  const reviewedAt = new Date().toISOString();
+  const nextNote = note?.trim() || existingPlayer.note;
 
-      return {
-        ...player,
-        status,
-        note: note?.trim() || player.note,
-        reviewedAt: new Date().toISOString()
-      };
-    })
-  }));
+  await execute(
+    'UPDATE whitelist_players SET status = ?, note = ?, reviewed_at = ? WHERE id = ?',
+    [status, nextNote ?? null, toMySqlDateTime(reviewedAt), playerId],
+  );
+
+  await appendOperationLog(
+    status === 'approved' ? 'whitelist_approved' : 'whitelist_rejected',
+    `${status === 'approved' ? '审核通过' : '审核拒绝'}玩家 ${existingPlayer.nickname} 的白名单申请。${note?.trim() ? ` 备注：${note.trim()}` : ''}`,
+    await getOperatorSnapshot(operatorId),
+  );
 };

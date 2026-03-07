@@ -7,9 +7,12 @@ import type {
   BanServerPlayerDraft,
   ManualBanDraft,
   ManualWhitelistDraft,
+  OperationLog,
   ServerDraft,
   ServerSettingsDraft,
   UserSummary,
+  WebsiteAdmin,
+  WebsiteAdminUpdateDraft,
 } from '../../types';
 import type { ApiEnvelope, KzGuardApi } from '../contracts';
 import { requestJson } from '../request';
@@ -30,6 +33,22 @@ export const httpApi: KzGuardApi = {
       whitelist: unwrap(whitelistPayload),
       bans: unwrap(bansPayload),
     };
+  },
+  async listWebsiteAdmins() {
+    const payload = await requestJson<ApiEnvelope<WebsiteAdmin[]>>('/admins');
+    return unwrap(payload);
+  },
+  async updateWebsiteAdmin(adminId: string, draft: WebsiteAdminUpdateDraft) {
+    const payload = await requestJson<ApiEnvelope<WebsiteAdmin>>(`/admins/${adminId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(draft),
+    });
+
+    return unwrap(payload);
+  },
+  async listOperationLogs() {
+    const payload = await requestJson<ApiEnvelope<OperationLog[]>>('/operation-logs');
+    return unwrap(payload);
   },
   async createCommunity(name) {
     const payload = await requestJson<ApiEnvelope<AppState['communities'][number]>>('/communities', {

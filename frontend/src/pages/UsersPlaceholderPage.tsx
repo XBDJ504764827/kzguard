@@ -152,7 +152,7 @@ export const UsersPlaceholderPage = () => {
       <Alert
         type="info"
         showIcon
-        content={`当前为前端原型，可通过切换演示账号预览不同角色权限。当前数据来源：${apiMode === 'http' ? '前端本地管理员原型' : '前端 Mock 原型'}。`}
+        content={`当前管理员列表与资料来自后端真实数据；由于登录系统尚未开发，仍可通过演示账号切换器预览不同角色权限。当前接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}。`}
       />
 
       {!isSystemAdmin ? (

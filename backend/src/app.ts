@@ -1,8 +1,11 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { env } from './config/env.js';
+import { registerAdminRoutes } from './modules/admins/routes.js';
+import { registerBanRoutes } from './modules/bans/routes.js';
 import { registerCommunityRoutes } from './modules/communities/routes.js';
 import { registerHealthRoutes } from './modules/health/routes.js';
+import { registerOperationLogRoutes } from './modules/operation-logs/routes.js';
 import { registerUserRoutes } from './modules/users/routes.js';
 import { registerWhitelistRoutes } from './modules/whitelist/routes.js';
 import { HttpError } from './utils/errors.js';
@@ -12,7 +15,7 @@ export const buildApp = async () => {
 
   await app.register(cors, {
     origin: env.corsOrigin,
-    credentials: true
+    credentials: true,
   });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -21,15 +24,21 @@ export const buildApp = async () => {
       return;
     }
 
-    reply.code(500).send({ message: '服务异常，请稍后重试' });
+    reply.code(500).send({ message: error instanceof Error ? error.message : '服务异常，请稍后重试' });
   });
 
-  await app.register(async (api) => {
-    await registerHealthRoutes(api);
-    await registerCommunityRoutes(api);
-    await registerWhitelistRoutes(api);
-    await registerUserRoutes(api);
-  }, { prefix: '/api' });
+  await app.register(
+    async (api) => {
+      await registerHealthRoutes(api);
+      await registerCommunityRoutes(api);
+      await registerWhitelistRoutes(api);
+      await registerBanRoutes(api);
+      await registerAdminRoutes(api);
+      await registerOperationLogRoutes(api);
+      await registerUserRoutes(api);
+    },
+    { prefix: '/api' },
+  );
 
   return app;
 };
