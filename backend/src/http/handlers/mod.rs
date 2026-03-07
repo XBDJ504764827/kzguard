@@ -6,6 +6,7 @@ pub(crate) mod health;
 pub(crate) mod operation_logs;
 pub(crate) mod public;
 pub(crate) mod server_access;
+pub(crate) mod server_bans;
 pub(crate) mod server_presence;
 pub(crate) mod users;
 pub(crate) mod whitelist;
@@ -28,6 +29,7 @@ pub(crate) use public::{
     create_public_whitelist_application_handler, get_public_whitelist_history_handler,
     list_public_bans_handler, list_public_whitelist_handler, resolve_public_steam_handler,
 };
+pub(crate) use server_bans::{create_server_ban_record_handler, revoke_server_ban_record_handler};
 pub(crate) use server_presence::report_server_presence_handler;
 pub(crate) use users::user_summary_handler;
 pub(crate) use whitelist::{

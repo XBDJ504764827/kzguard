@@ -11,13 +11,15 @@ public Plugin myinfo =
 	name = "KZ Guard Presence",
 	author = "wqq",
 	description = "Reports live CS:GO players to KZ Guard with shared config/cache and plugin_token auth",
-	version = "0.3.0",
+	version = "0.4.0",
 	url = ""
 };
 
 char g_ApiUrl[256];
 char g_AccessCheckUrl[256];
 char g_AccessSyncUrl[256];
+char g_BanSyncUrl[256];
+char g_UnbanSyncUrl[256];
 char g_ServerId[128];
 char g_PluginToken[192];
 char g_AccessCacheFile[PLATFORM_MAX_PATH];
@@ -37,6 +39,8 @@ public void OnPluginStart()
 {
 	RegServerCmd("kzguard_kick_userid", Command_KickUserId, "KZ Guard 按 userid 踢出玩家");
 	RegServerCmd("kzguard_ban_userid", Command_BanUserId, "KZ Guard 按 userid 封禁玩家");
+	RegAdminCmd("sm_ban", Command_AdminBan, ADMFLAG_BAN, "sm_ban <#userid|name> <minutes|0> <reason>");
+	RegAdminCmd("sm_unban", Command_AdminUnban, ADMFLAG_UNBAN, "sm_unban <steamid|steamid64|steamid3|ip>");
 
 	g_RequestUserIds = new StringMap();
 	EnsureConfigTemplateExists();
@@ -178,6 +182,171 @@ public Action Command_BanUserId(int args)
 	return Plugin_Handled;
 }
 
+
+public Action Command_AdminBan(int client, int args)
+{
+	if (args < 3)
+	{
+		ReplyToCommand(client, "[KZ Guard] 用法: sm_ban <#userid|name> <minutes|0> <reason>");
+		return Plugin_Handled;
+	}
+
+	char arguments[256];
+	char targetArg[64];
+	char durationArg[32];
+	GetCmdArgString(arguments, sizeof(arguments));
+
+	int len = BreakString(arguments, targetArg, sizeof(targetArg));
+	if (len == -1)
+	{
+		ReplyToCommand(client, "[KZ Guard] 用法: sm_ban <#userid|name> <minutes|0> <reason>");
+		return Plugin_Handled;
+	}
+
+	int nextLen = BreakString(arguments[len], durationArg, sizeof(durationArg));
+	if (nextLen == -1)
+	{
+		ReplyToCommand(client, "[KZ Guard] 用法: sm_ban <#userid|name> <minutes|0> <reason>");
+		return Plugin_Handled;
+	}
+	len += nextLen;
+
+	char reason[192];
+	strcopy(reason, sizeof(reason), arguments[len]);
+	TrimString(reason);
+	if (reason[0] == '\0')
+	{
+		ReplyToCommand(client, "[KZ Guard] 封禁玩家时必须填写理由。");
+		return Plugin_Handled;
+	}
+
+	int targetList[1];
+	char targetName[MAX_TARGET_LENGTH];
+	bool tnIsMl;
+	int matchCount = ProcessTargetString(
+		targetArg,
+		client,
+		targetList,
+		1,
+		COMMAND_FILTER_CONNECTED | COMMAND_FILTER_NO_MULTI | COMMAND_FILTER_NO_BOTS,
+		targetName,
+		sizeof(targetName),
+		tnIsMl
+	);
+	if (matchCount <= 0)
+	{
+		ReplyToTargetError(client, matchCount);
+		return Plugin_Handled;
+	}
+
+	int target = targetList[0];
+	char targetNickname[MAX_NAME_LENGTH];
+	char targetSteamIdentifier[MAX_AUTHID_LENGTH];
+	char targetIpAddress[64];
+	if (!CaptureBanTargetSnapshot(
+		target,
+		targetNickname,
+		sizeof(targetNickname),
+		targetSteamIdentifier,
+		sizeof(targetSteamIdentifier),
+		targetIpAddress,
+		sizeof(targetIpAddress)
+	))
+	{
+		ReplyToCommand(client, "[KZ Guard] 无法读取目标玩家的 Steam 标识，已取消封禁。");
+		return Plugin_Handled;
+	}
+
+	int durationMinutes = StringToInt(durationArg);
+	if (durationMinutes < 0)
+	{
+		durationMinutes = 0;
+	}
+
+	if (!BanClient(target, durationMinutes, BANFLAG_AUTHID, reason, reason, "kzguard_sm_ban", client))
+	{
+		ReplyToCommand(client, "[KZ Guard] 本地封禁失败，请稍后重试。");
+		return Plugin_Handled;
+	}
+
+	char operatorName[MAX_NAME_LENGTH];
+	char operatorSteamIdentifier[MAX_AUTHID_LENGTH];
+	GetCommandOperatorProfile(client, operatorName, sizeof(operatorName), operatorSteamIdentifier, sizeof(operatorSteamIdentifier));
+	LogAction(
+		client,
+		-1,
+		"\"%L\" banned \"%s\" (minutes \"%d\") (reason \"%s\")",
+		client,
+		targetNickname,
+		durationMinutes,
+		reason
+	);
+
+	if (HasBanSyncConfiguration())
+	{
+		SendBanSyncRequest(
+			operatorName,
+			operatorSteamIdentifier,
+			targetNickname,
+			targetSteamIdentifier,
+			targetIpAddress,
+			durationMinutes,
+			reason
+		);
+		ReplyToCommand(client, "[KZ Guard] 已封禁 %s，正在同步网站封禁管理。", targetNickname);
+	}
+	else
+	{
+		ReplyToCommand(client, "[KZ Guard] 本地封禁已执行，但未配置网站封禁同步地址。");
+	}
+
+	QueuePresenceReport(1.0);
+	return Plugin_Handled;
+}
+
+public Action Command_AdminUnban(int client, int args)
+{
+	if (args < 1)
+	{
+		ReplyToCommand(client, "[KZ Guard] 用法: sm_unban <steamid|steamid64|steamid3|ip>");
+		return Plugin_Handled;
+	}
+
+	char identity[192];
+	GetCmdArgString(identity, sizeof(identity));
+	ReplaceString(identity, sizeof(identity), "\"", "");
+	TrimString(identity);
+	if (identity[0] == '\0')
+	{
+		ReplyToCommand(client, "[KZ Guard] 请输入要解封的 Steam 标识或 IP。");
+		return Plugin_Handled;
+	}
+
+	int banFlags = IsLikelyIpAddress(identity) ? BANFLAG_IP : BANFLAG_AUTHID;
+	if (!RemoveBan(identity, banFlags, "kzguard_sm_unban", client))
+	{
+		ReplyToCommand(client, "[KZ Guard] 本地解封失败，请检查输入是否正确。");
+		return Plugin_Handled;
+	}
+
+	char operatorName[MAX_NAME_LENGTH];
+	char operatorSteamIdentifier[MAX_AUTHID_LENGTH];
+	GetCommandOperatorProfile(client, operatorName, sizeof(operatorName), operatorSteamIdentifier, sizeof(operatorSteamIdentifier));
+	LogAction(client, -1, "\"%L\" removed ban (filter \"%s\")", client, identity);
+
+	if (HasUnbanSyncConfiguration())
+	{
+		SendUnbanSyncRequest(operatorName, operatorSteamIdentifier, identity);
+		ReplyToCommand(client, "[KZ Guard] 已解除封禁，正在同步网站封禁管理。");
+	}
+	else
+	{
+		ReplyToCommand(client, "[KZ Guard] 本地解封已执行，但未配置网站封禁同步地址。");
+	}
+
+	return Plugin_Handled;
+}
+
 public Action Timer_ReportPresence(Handle timer, any data)
 {
 	SendPresenceReport();
@@ -271,6 +440,18 @@ public void OnAccessSyncCompleted(Handle request, bool failure, bool requestSucc
 	delete request;
 }
 
+public void OnBanSyncCompleted(Handle request, bool failure, bool requestSuccessful, EHTTPStatusCode statusCode, any contextValue)
+{
+	LogHttpSyncFailure("封禁记录同步", request, failure, requestSuccessful, statusCode);
+	delete request;
+}
+
+public void OnUnbanSyncCompleted(Handle request, bool failure, bool requestSuccessful, EHTTPStatusCode statusCode, any contextValue)
+{
+	LogHttpSyncFailure("解封记录同步", request, failure, requestSuccessful, statusCode);
+	delete request;
+}
+
 public void OnAccessCheckCompleted(Handle request, bool failure, bool requestSuccessful, EHTTPStatusCode statusCode, any contextValue)
 {
 	int userId = 0;
@@ -339,6 +520,8 @@ void ResetRuntimeConfiguration()
 	g_ApiUrl[0] = '\0';
 	g_AccessCheckUrl[0] = '\0';
 	g_AccessSyncUrl[0] = '\0';
+	g_BanSyncUrl[0] = '\0';
+	g_UnbanSyncUrl[0] = '\0';
 	g_ServerId[0] = '\0';
 	g_PluginToken[0] = '\0';
 	g_InstancePort[0] = '\0';
@@ -447,6 +630,8 @@ bool LoadRuntimeConfiguration()
 		kv.GetString("api_url", g_ApiUrl, sizeof(g_ApiUrl), "");
 		kv.GetString("access_check_url", g_AccessCheckUrl, sizeof(g_AccessCheckUrl), "");
 		kv.GetString("access_sync_url", g_AccessSyncUrl, sizeof(g_AccessSyncUrl), "");
+		kv.GetString("ban_sync_url", g_BanSyncUrl, sizeof(g_BanSyncUrl), "");
+		kv.GetString("unban_sync_url", g_UnbanSyncUrl, sizeof(g_UnbanSyncUrl), "");
 		kv.GetString("access_cache_file", g_AccessCacheFile, sizeof(g_AccessCacheFile), "data/kzguard_access_cache.kv");
 
 		int reportInterval = kv.GetNum("report_interval", 15);
@@ -489,6 +674,8 @@ bool LoadRuntimeConfiguration()
 	TrimString(g_ApiUrl);
 	TrimString(g_AccessCheckUrl);
 	TrimString(g_AccessSyncUrl);
+	TrimString(g_BanSyncUrl);
+	TrimString(g_UnbanSyncUrl);
 	TrimString(g_ServerId);
 	TrimString(g_PluginToken);
 	TrimString(g_AccessCacheFile);
@@ -497,6 +684,8 @@ bool LoadRuntimeConfiguration()
 	{
 		strcopy(g_AccessCacheFile, sizeof(g_AccessCacheFile), "data/kzguard_access_cache.kv");
 	}
+
+	PopulateDerivedInternalUrls();
 
 	if (g_InstancePort[0] == '\0')
 	{
@@ -526,6 +715,48 @@ bool HasAccessSyncConfiguration()
 bool HasAccessCheckConfiguration()
 {
 	return g_AccessCheckUrl[0] != '\0' && g_ServerId[0] != '\0' && g_PluginToken[0] != '\0';
+}
+
+bool HasBanSyncConfiguration()
+{
+	return g_BanSyncUrl[0] != '\0' && g_ServerId[0] != '\0' && g_PluginToken[0] != '\0';
+}
+
+bool HasUnbanSyncConfiguration()
+{
+	return g_UnbanSyncUrl[0] != '\0' && g_ServerId[0] != '\0' && g_PluginToken[0] != '\0';
+}
+
+void PopulateDerivedInternalUrls()
+{
+	if (g_BanSyncUrl[0] == '\0')
+	{
+		DeriveSiblingInternalUrl(g_ApiUrl, "/api/internal/server-bans", g_BanSyncUrl, sizeof(g_BanSyncUrl));
+	}
+
+	if (g_UnbanSyncUrl[0] == '\0')
+	{
+		DeriveSiblingInternalUrl(g_ApiUrl, "/api/internal/server-bans/revoke", g_UnbanSyncUrl, sizeof(g_UnbanSyncUrl));
+	}
+}
+
+void DeriveSiblingInternalUrl(const char[] sourceUrl, const char[] nextPath, char[] output, int maxlen)
+{
+	output[0] = '\0';
+	if (sourceUrl[0] == '\0')
+	{
+		return;
+	}
+
+	int marker = StrContains(sourceUrl, "/api/internal/");
+	if (marker == -1)
+	{
+		return;
+	}
+
+	strcopy(output, maxlen, sourceUrl);
+	output[marker] = '\0';
+	StrCat(output, maxlen, nextPath);
 }
 
 void BuildAccessSyncTempFilePath(char[] path, int maxlen)
@@ -809,6 +1040,94 @@ void SendClientAccessCheck(int client)
 	}
 }
 
+void SendBanSyncRequest(
+	const char[] operatorName,
+	const char[] operatorSteamIdentifier,
+	const char[] targetNickname,
+	const char[] targetSteamIdentifier,
+	const char[] targetIpAddress,
+	int durationMinutes,
+	const char[] reason
+)
+{
+	if (!HasBanSyncConfiguration())
+	{
+		return;
+	}
+
+	char payload[2048];
+	BuildBanSyncPayload(
+		payload,
+		sizeof(payload),
+		g_ServerId,
+		operatorName,
+		operatorSteamIdentifier,
+		targetNickname,
+		targetSteamIdentifier,
+		targetIpAddress,
+		durationMinutes,
+		reason
+	);
+
+	Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, g_BanSyncUrl);
+	if (request == null)
+	{
+		LogError("[KZ Guard] 创建封禁同步 HTTP 请求失败，请确认已安装 SteamWorks 扩展");
+		return;
+	}
+
+	SteamWorks_SetHTTPRequestHeaderValue(request, "Content-Type", "application/json");
+	SteamWorks_SetHTTPRequestHeaderValue(request, "X-Plugin-Token", g_PluginToken);
+	SteamWorks_SetHTTPCallbacks(request, OnBanSyncCompleted);
+	SteamWorks_SetHTTPRequestRawPostBody(request, "application/json", payload, strlen(payload));
+
+	if (!SteamWorks_SendHTTPRequest(request))
+	{
+		delete request;
+		LogError("[KZ Guard] 发送封禁同步 HTTP 请求失败，请确认 SteamWorks 扩展工作正常");
+	}
+}
+
+void SendUnbanSyncRequest(
+	const char[] operatorName,
+	const char[] operatorSteamIdentifier,
+	const char[] identity
+)
+{
+	if (!HasUnbanSyncConfiguration())
+	{
+		return;
+	}
+
+	char payload[1024];
+	BuildUnbanSyncPayload(
+		payload,
+		sizeof(payload),
+		g_ServerId,
+		operatorName,
+		operatorSteamIdentifier,
+		identity
+	);
+
+	Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, g_UnbanSyncUrl);
+	if (request == null)
+	{
+		LogError("[KZ Guard] 创建解封同步 HTTP 请求失败，请确认已安装 SteamWorks 扩展");
+		return;
+	}
+
+	SteamWorks_SetHTTPRequestHeaderValue(request, "Content-Type", "application/json");
+	SteamWorks_SetHTTPRequestHeaderValue(request, "X-Plugin-Token", g_PluginToken);
+	SteamWorks_SetHTTPCallbacks(request, OnUnbanSyncCompleted);
+	SteamWorks_SetHTTPRequestRawPostBody(request, "application/json", payload, strlen(payload));
+
+	if (!SteamWorks_SendHTTPRequest(request))
+	{
+		delete request;
+		LogError("[KZ Guard] 发送解封同步 HTTP 请求失败，请确认 SteamWorks 扩展工作正常");
+	}
+}
+
 void HandleAccessCheckFallback(int client)
 {
 	bool hasDecision = false;
@@ -1027,6 +1346,229 @@ bool TakeRequestUserId(Handle request, int &userId)
 	bool found = g_RequestUserIds.GetValue(key, userId);
 	g_RequestUserIds.Remove(key);
 	return found;
+}
+
+void LogHttpSyncFailure(const char[] action, Handle request, bool failure, bool requestSuccessful, EHTTPStatusCode statusCode)
+{
+	int status = view_as<int>(statusCode);
+	if (!(failure || !requestSuccessful || status < view_as<int>(k_EHTTPStatusCode200OK) || status >= 300))
+	{
+		return;
+	}
+
+	char body[1024];
+	if (SteamWorks_GetHTTPResponseBodyData(request, body, sizeof(body)))
+	{
+		LogError(
+			"[KZ Guard] %s失败：failure=%d requestSuccessful=%d status=%d body=%s",
+			action,
+			failure,
+			requestSuccessful,
+			status,
+			body
+		);
+		return;
+	}
+
+	LogError(
+		"[KZ Guard] %s失败：failure=%d requestSuccessful=%d status=%d",
+		action,
+		failure,
+		requestSuccessful,
+		status
+	);
+}
+
+void BuildBanSyncPayload(
+	char[] payload,
+	int maxlen,
+	const char[] serverId,
+	const char[] operatorName,
+	const char[] operatorSteamIdentifier,
+	const char[] targetNickname,
+	const char[] targetSteamIdentifier,
+	const char[] targetIpAddress,
+	int durationMinutes,
+	const char[] reason
+)
+{
+	char escapedServerId[192];
+	char escapedOperatorName[256];
+	char escapedOperatorSteamIdentifier[128];
+	char escapedTargetNickname[256];
+	char escapedTargetSteamIdentifier[128];
+	char escapedTargetIpAddress[128];
+	char escapedReason[512];
+	EscapeJsonString(serverId, escapedServerId, sizeof(escapedServerId));
+	EscapeJsonString(operatorName, escapedOperatorName, sizeof(escapedOperatorName));
+	EscapeJsonString(operatorSteamIdentifier, escapedOperatorSteamIdentifier, sizeof(escapedOperatorSteamIdentifier));
+	EscapeJsonString(targetNickname, escapedTargetNickname, sizeof(escapedTargetNickname));
+	EscapeJsonString(targetSteamIdentifier, escapedTargetSteamIdentifier, sizeof(escapedTargetSteamIdentifier));
+	EscapeJsonString(targetIpAddress, escapedTargetIpAddress, sizeof(escapedTargetIpAddress));
+	EscapeJsonString(reason, escapedReason, sizeof(escapedReason));
+
+	if (durationMinutes > 0)
+	{
+		Format(
+			payload,
+			maxlen,
+			"{\"serverId\":\"%s\",\"nickname\":\"%s\",\"banType\":\"steam_account\",\"steamIdentifier\":\"%s\",\"ipAddress\":\"%s\",\"reason\":\"%s\",\"durationSeconds\":%d,\"operatorName\":\"%s\",\"operatorSteamIdentifier\":\"%s\"}",
+			escapedServerId,
+			escapedTargetNickname,
+			escapedTargetSteamIdentifier,
+			escapedTargetIpAddress,
+			escapedReason,
+			durationMinutes * 60,
+			escapedOperatorName,
+			escapedOperatorSteamIdentifier
+		);
+		return;
+	}
+
+	Format(
+		payload,
+		maxlen,
+		"{\"serverId\":\"%s\",\"nickname\":\"%s\",\"banType\":\"steam_account\",\"steamIdentifier\":\"%s\",\"ipAddress\":\"%s\",\"reason\":\"%s\",\"durationSeconds\":null,\"operatorName\":\"%s\",\"operatorSteamIdentifier\":\"%s\"}",
+		escapedServerId,
+		escapedTargetNickname,
+		escapedTargetSteamIdentifier,
+		escapedTargetIpAddress,
+		escapedReason,
+		escapedOperatorName,
+		escapedOperatorSteamIdentifier
+	);
+}
+
+void BuildUnbanSyncPayload(
+	char[] payload,
+	int maxlen,
+	const char[] serverId,
+	const char[] operatorName,
+	const char[] operatorSteamIdentifier,
+	const char[] identity
+)
+{
+	char escapedServerId[192];
+	char escapedOperatorName[256];
+	char escapedOperatorSteamIdentifier[128];
+	char escapedIdentity[256];
+	EscapeJsonString(serverId, escapedServerId, sizeof(escapedServerId));
+	EscapeJsonString(operatorName, escapedOperatorName, sizeof(escapedOperatorName));
+	EscapeJsonString(operatorSteamIdentifier, escapedOperatorSteamIdentifier, sizeof(escapedOperatorSteamIdentifier));
+	EscapeJsonString(identity, escapedIdentity, sizeof(escapedIdentity));
+
+	Format(
+		payload,
+		maxlen,
+		"{\"serverId\":\"%s\",\"identity\":\"%s\",\"operatorName\":\"%s\",\"operatorSteamIdentifier\":\"%s\"}",
+		escapedServerId,
+		escapedIdentity,
+		escapedOperatorName,
+		escapedOperatorSteamIdentifier
+	);
+}
+
+bool GetPreferredClientSteamIdentifier(int client, char[] output, int maxlen)
+{
+	if (GetClientAuthId(client, AuthId_SteamID64, output, maxlen, true))
+	{
+		return true;
+	}
+
+	if (GetClientAuthId(client, AuthId_Steam2, output, maxlen, true))
+	{
+		return true;
+	}
+
+	if (GetClientAuthId(client, AuthId_Steam3, output, maxlen, true))
+	{
+		return true;
+	}
+
+	output[0] = '\0';
+	return false;
+}
+
+bool CaptureBanTargetSnapshot(
+	int client,
+	char[] nickname,
+	int nicknameMaxlen,
+	char[] steamIdentifier,
+	int steamIdentifierMaxlen,
+	char[] ipAddress,
+	int ipAddressMaxlen
+)
+{
+	if (client <= 0 || !IsClientInGame(client) || IsFakeClient(client))
+	{
+		nickname[0] = '\0';
+		steamIdentifier[0] = '\0';
+		ipAddress[0] = '\0';
+		return false;
+	}
+
+	GetClientName(client, nickname, nicknameMaxlen);
+	if (!GetPreferredClientSteamIdentifier(client, steamIdentifier, steamIdentifierMaxlen))
+	{
+		ipAddress[0] = '\0';
+		return false;
+	}
+
+	if (!GetClientIP(client, ipAddress, ipAddressMaxlen, true))
+	{
+		ipAddress[0] = '\0';
+	}
+
+	return true;
+}
+
+void GetCommandOperatorProfile(
+	int client,
+	char[] operatorName,
+	int operatorNameMaxlen,
+	char[] operatorSteamIdentifier,
+	int operatorSteamIdentifierMaxlen
+)
+{
+	if (client > 0 && IsClientInGame(client))
+	{
+		GetClientName(client, operatorName, operatorNameMaxlen);
+		if (!GetPreferredClientSteamIdentifier(client, operatorSteamIdentifier, operatorSteamIdentifierMaxlen))
+		{
+			operatorSteamIdentifier[0] = '\0';
+		}
+		return;
+	}
+
+	strcopy(operatorName, operatorNameMaxlen, "服务器控制台");
+	operatorSteamIdentifier[0] = '\0';
+}
+
+bool IsLikelyIpAddress(const char[] value)
+{
+	int length = strlen(value);
+	if (length < 7 || length > 15)
+	{
+		return false;
+	}
+
+	int dotCount = 0;
+	for (int index = 0; index < length; index++)
+	{
+		char current = value[index];
+		if (current == '.')
+		{
+			dotCount++;
+			continue;
+		}
+
+		if (!IsCharNumeric(current))
+		{
+			return false;
+		}
+	}
+
+	return dotCount == 3;
 }
 
 void BuildPresencePayload(char[] payload, int maxlen, const char[] serverId)

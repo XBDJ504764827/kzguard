@@ -42,6 +42,11 @@ pub(crate) fn build_router(state: SharedState) -> Router {
         .route("/api/internal/server-presence/report", post(report_server_presence_handler))
         .route("/api/internal/server-access/check", get(check_server_access_handler))
         .route("/api/internal/server-access/sync", get(sync_server_access_handler))
+        .route("/api/internal/server-bans", post(create_server_ban_record_handler))
+        .route(
+            "/api/internal/server-bans/revoke",
+            post(revoke_server_ban_record_handler),
+        )
         .route(
             "/api/communities",
             get(list_communities_handler).post(create_community_handler),

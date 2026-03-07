@@ -17,6 +17,10 @@
 - 提供两个 RCON 可调用的服务端命令：
   - `kzguard_kick_userid <userid> <reason>`
   - `kzguard_ban_userid <userid> <steam|ip> <seconds> <reason>`
+- 提供两个游戏内管理员命令（聊天可直接使用 `!ban` / `!unban`）：
+  - `sm_ban <#userid|name> <minutes|0> <reason>`
+  - `sm_unban <steamid|steamid64|steamid3|ip>`
+- 游戏内 `!ban` / `!unban` 会先执行本地封禁或解封，再同步到网站封禁管理
 
 ## 准入逻辑
 - 仅开启白名单：只有白名单玩家可进入
@@ -27,7 +31,7 @@
 插件首次运行会自动生成 `cfg/sourcemod/kzguard.cfg`。
 
 该文件采用 `KeyValues` 结构，分为两部分：
-- `global`：整台机器共享的配置，例如后端地址、上报间隔、共享缓存文件路径
+- `global`：整台机器共享的配置，例如后端地址、上报间隔、共享缓存文件路径，以及封禁同步接口地址
 - `instances`：按游戏服端口区分的实例配置，每个端口单独填写：
   - `server_id`
   - `plugin_token`
@@ -54,6 +58,8 @@
 - 在线玩家上报
 - 实时进服校验
 - 准入快照同步
+- 游戏内封禁同步
+- 游戏内解封同步
 
 ## 运行依赖
 SourceMod 1.11 本体**不自带 HTTP 客户端**，此插件编译时使用了本目录补充的 `steamworks.inc` 声明。

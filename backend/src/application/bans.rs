@@ -11,7 +11,10 @@ use crate::{
         models::{BanRecord, OperatorSnapshot, ResolvedSteamIdentifiers},
     },
     error::{AppError, AppResult},
-    http::requests::{BanRecordUpdateDraft, BanServerPlayerDraft, ManualBanDraft},
+    http::requests::{
+        BanRecordUpdateDraft, BanServerPlayerDraft, InternalServerBanSyncBody,
+        InternalServerUnbanSyncBody, ManualBanDraft,
+    },
     infra::mysql::insert_ban_record,
     support::{
         convert::trim_to_none,
@@ -19,12 +22,19 @@ use crate::{
         rcon::execute_rcon_command,
         steam::{resolve_steam_identifiers_strict, resolve_steam_profile, steam_vanity_regex},
         time::{iso_to_mysql, now_iso},
-        validation::validate_ban_draft,
+        validation::{ipv4_regex, validate_ban_draft},
     },
 };
 use axum::http::StatusCode;
 use redis::Client as RedisClient;
-use sqlx::MySqlPool;
+use sqlx::{FromRow, MySqlPool};
+
+#[derive(Debug, FromRow)]
+struct PluginServerContext {
+    name: String,
+    community_name: String,
+    plugin_token: String,
+}
 
 pub(crate) async fn ban_server_player(
     pool: &MySqlPool,
@@ -110,6 +120,100 @@ pub(crate) async fn ban_server_player(
     .await?;
 
     Ok(ban)
+}
+
+pub(crate) async fn create_plugin_ban_entry(
+    pool: &MySqlPool,
+    provided_plugin_token: &str,
+    draft: InternalServerBanSyncBody,
+) -> AppResult<BanRecord> {
+    let server = authenticate_plugin_server(pool, &draft.server_id, provided_plugin_token).await?;
+    let nickname = trim_to_none(draft.nickname);
+    let ip_address = trim_to_none(draft.ip_address);
+    validate_ban_draft(
+        Some(&draft.ban_type),
+        Some(&draft.steam_identifier),
+        ip_address.as_deref(),
+        draft.duration_seconds,
+        &draft.reason,
+    )?;
+
+    let operator = build_plugin_operator_snapshot(draft.operator_name, draft.operator_steam_identifier);
+    let ban = create_ban_record(
+        nickname,
+        draft.ban_type,
+        draft.steam_identifier,
+        ip_address,
+        draft.reason,
+        draft.duration_seconds,
+        server.name.clone(),
+        Some(server.community_name.clone()),
+        &operator,
+        "server_action",
+    )?;
+
+    insert_ban_record(pool, &ban).await?;
+
+    append_operation_log(
+        pool,
+        "server_player_banned",
+        format!(
+            "游戏内管理员在服务器 {} 以{}封禁了玩家 {}，IP：{}，时长为 {}。原因：{}",
+            ban.server_name,
+            if ban.ban_type == "ip" {
+                "IP封禁"
+            } else {
+                "Steam账号封禁"
+            },
+            ban.nickname.clone().unwrap_or_else(|| ban.steam_id.clone()),
+            ban.ip_address
+                .clone()
+                .unwrap_or_else(|| "等待玩家下次进服自动回填".to_string()),
+            ban.duration_seconds
+                .map(|seconds| format!("{} 秒", seconds))
+                .unwrap_or_else(|| "永久封禁".to_string()),
+            ban.reason,
+        ),
+        &operator,
+    )
+    .await?;
+
+    Ok(ban)
+}
+
+pub(crate) async fn revoke_plugin_ban_entry(
+    pool: &MySqlPool,
+    provided_plugin_token: &str,
+    draft: InternalServerUnbanSyncBody,
+) -> AppResult<BanRecord> {
+    let server = authenticate_plugin_server(pool, &draft.server_id, provided_plugin_token).await?;
+    let operator = build_plugin_operator_snapshot(draft.operator_name, draft.operator_steam_identifier);
+    let identity = trim_to_none(Some(draft.identity))
+        .ok_or_else(|| AppError::http(StatusCode::BAD_REQUEST, "请输入要解封的 Steam 标识或 IP"))?;
+    let existing = find_active_ban_record_by_identity(pool, &identity).await?;
+    let revoked = revoke_existing_ban_record_with_operator(pool, existing, &operator).await?;
+
+    append_operation_log(
+        pool,
+        "ban_record_revoked",
+        format!(
+            "游戏内管理员在服务器 {} 解除了玩家 {} 的封禁，原封禁属性为{}。",
+            server.name,
+            revoked
+                .nickname
+                .clone()
+                .unwrap_or_else(|| revoked.steam_id.clone()),
+            if revoked.ban_type == "ip" {
+                "IP封禁"
+            } else {
+                "Steam账号封禁"
+            },
+        ),
+        &operator,
+    )
+    .await?;
+
+    Ok(revoked)
 }
 
 pub(crate) async fn list_bans(pool: &MySqlPool) -> AppResult<Vec<BanRecord>> {
@@ -299,37 +403,7 @@ pub(crate) async fn revoke_ban_record(
 ) -> AppResult<BanRecord> {
     let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
     let existing = get_ban_record(pool, ban_id).await?;
-
-    if existing.status == "revoked" {
-        return Err(AppError::http(StatusCode::BAD_REQUEST, "该封禁记录已解除"));
-    }
-
-    let now = now_iso();
-    sqlx::query(
-        r#"
-        UPDATE ban_records
-           SET status = 'revoked', updated_at = ?, revoked_at = ?, revoked_by_operator_id = ?, revoked_by_operator_name = ?, revoked_by_operator_role = ?
-         WHERE id = ?
-        "#,
-    )
-    .bind(iso_to_mysql(&now))
-    .bind(iso_to_mysql(&now))
-    .bind(&operator.id)
-    .bind(&operator.name)
-    .bind(&operator.role)
-    .bind(ban_id)
-    .execute(pool)
-    .await?;
-
-    let revoked = BanRecord {
-        status: "revoked".to_string(),
-        updated_at: Some(now.clone()),
-        revoked_at: Some(now),
-        revoked_by_operator_id: Some(operator.id.clone()),
-        revoked_by_operator_name: Some(operator.name.clone()),
-        revoked_by_operator_role: Some(operator.role.clone()),
-        ..existing
-    };
+    let revoked = revoke_existing_ban_record_with_operator(pool, existing, &operator).await?;
 
     append_operation_log(
         pool,
@@ -479,6 +553,174 @@ async fn resolve_manual_ban_identifiers(input: &str) -> AppResult<ResolvedSteamI
     }
 
     resolve_steam_identifiers_strict(input)
+}
+
+async fn authenticate_plugin_server(
+    pool: &MySqlPool,
+    server_id: &str,
+    provided_plugin_token: &str,
+) -> AppResult<PluginServerContext> {
+    let server_id = server_id.trim();
+    if server_id.is_empty() {
+        return Err(AppError::http(StatusCode::BAD_REQUEST, "缺少服务器 ID"));
+    }
+
+    let server = sqlx::query_as::<_, PluginServerContext>(
+        r#"
+        SELECT s.name,
+               c.name AS community_name,
+               s.plugin_token
+          FROM servers s
+          INNER JOIN communities c ON c.id = s.community_id
+         WHERE s.id = ?
+        "#,
+    )
+    .bind(server_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到对应服务器，请确认 serverId 配置"))?;
+
+    if server.plugin_token.trim() != provided_plugin_token.trim() {
+        return Err(AppError::http(StatusCode::UNAUTHORIZED, "服务器 plugin_token 校验失败"));
+    }
+
+    Ok(server)
+}
+
+fn build_plugin_operator_snapshot(
+    operator_name: Option<String>,
+    operator_steam_identifier: Option<String>,
+) -> OperatorSnapshot {
+    let name = trim_to_none(operator_name).unwrap_or_else(|| "游戏服管理员".to_string());
+    let id = trim_to_none(operator_steam_identifier)
+        .and_then(|identifier| {
+            resolve_steam_identifiers_strict(&identifier)
+                .ok()
+                .map(|resolved| format!("ingame-admin:{}", resolved.steam_id64))
+        })
+        .unwrap_or_else(|| {
+            format!(
+                "ingame-admin:{}",
+                normalize_operator_identity_fragment(&name)
+            )
+        });
+
+    OperatorSnapshot {
+        id,
+        name,
+        role: "normal_admin".to_string(),
+    }
+}
+
+fn normalize_operator_identity_fragment(input: &str) -> String {
+    let normalized = input
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+
+    let collapsed = normalized
+        .split('-')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+
+    if collapsed.is_empty() {
+        "server-admin".to_string()
+    } else {
+        collapsed
+    }
+}
+
+async fn find_active_ban_record_by_identity(
+    pool: &MySqlPool,
+    identity: &str,
+) -> AppResult<BanRecord> {
+    let identity = identity.trim();
+    let row = if ipv4_regex().is_match(identity) {
+        sqlx::query_as::<_, DbBanRecord>(
+            r#"
+            SELECT *
+              FROM ban_records
+             WHERE status = 'active' AND ban_type = 'ip' AND ip_address = ?
+             ORDER BY banned_at DESC
+             LIMIT 1
+            "#,
+        )
+        .bind(identity)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        let identifiers = resolve_manual_ban_identifiers(identity).await?;
+        sqlx::query_as::<_, DbBanRecord>(
+            r#"
+            SELECT *
+              FROM ban_records
+             WHERE status = 'active'
+               AND ban_type = 'steam_account'
+               AND (
+                    steam_id64 = ?
+                 OR steam_id = ?
+                 OR steam_id3 = ?
+                 OR steam_identifier = ?
+               )
+             ORDER BY banned_at DESC
+             LIMIT 1
+            "#,
+        )
+        .bind(&identifiers.steam_id64)
+        .bind(&identifiers.steam_id)
+        .bind(&identifiers.steam_id3)
+        .bind(identity)
+        .fetch_optional(pool)
+        .await?
+    };
+
+    row.map(map_ban_record)
+        .ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到要解除的活动封禁记录"))
+}
+
+async fn revoke_existing_ban_record_with_operator(
+    pool: &MySqlPool,
+    existing: BanRecord,
+    operator: &OperatorSnapshot,
+) -> AppResult<BanRecord> {
+    if existing.status == "revoked" {
+        return Err(AppError::http(StatusCode::BAD_REQUEST, "该封禁记录已解除"));
+    }
+
+    let now = now_iso();
+    sqlx::query(
+        r#"
+        UPDATE ban_records
+           SET status = 'revoked', updated_at = ?, revoked_at = ?, revoked_by_operator_id = ?, revoked_by_operator_name = ?, revoked_by_operator_role = ?
+         WHERE id = ?
+        "#,
+    )
+    .bind(iso_to_mysql(&now))
+    .bind(iso_to_mysql(&now))
+    .bind(&operator.id)
+    .bind(&operator.name)
+    .bind(&operator.role)
+    .bind(&existing.id)
+    .execute(pool)
+    .await?;
+
+    Ok(BanRecord {
+        status: "revoked".to_string(),
+        updated_at: Some(now.clone()),
+        revoked_at: Some(now),
+        revoked_by_operator_id: Some(operator.id.clone()),
+        revoked_by_operator_name: Some(operator.name.clone()),
+        revoked_by_operator_role: Some(operator.role.clone()),
+        ..existing
+    })
 }
 
 fn normalize_ban_status_filter(status: Option<String>) -> AppResult<Option<String>> {

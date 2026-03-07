@@ -214,6 +214,29 @@ pub(crate) struct WhitelistPlayerPath {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct InternalServerBanSyncBody {
+    pub(crate) server_id: String,
+    pub(crate) nickname: Option<String>,
+    pub(crate) ban_type: String,
+    pub(crate) steam_identifier: String,
+    pub(crate) ip_address: Option<String>,
+    pub(crate) reason: String,
+    pub(crate) duration_seconds: Option<i32>,
+    pub(crate) operator_name: Option<String>,
+    pub(crate) operator_steam_identifier: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InternalServerUnbanSyncBody {
+    pub(crate) server_id: String,
+    pub(crate) identity: String,
+    pub(crate) operator_name: Option<String>,
+    pub(crate) operator_steam_identifier: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct InternalServerSyncQuery {
     pub(crate) server_id: String,
 }
