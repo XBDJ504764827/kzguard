@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppLayout } from '../layouts/AppLayout';
+import { BanManagementPage } from '../pages/BanManagementPage';
 import { CommunityManagementPage } from '../pages/CommunityManagementPage';
 import { OperationLogsPage } from '../pages/OperationLogsPage';
 import { OverviewPage } from '../pages/OverviewPage';
@@ -13,6 +14,7 @@ export const AppRouter = () => {
         <Route path="/" element={<OverviewPage />} />
         <Route path="/communities" element={<CommunityManagementPage />} />
         <Route path="/whitelist" element={<WhitelistManagementPage />} />
+        <Route path="/bans" element={<BanManagementPage />} />
         <Route path="/users" element={<UsersPlaceholderPage />} />
         <Route path="/operation-logs" element={<OperationLogsPage />} />
       </Route>

@@ -107,6 +107,19 @@ body {
   background: rgba(127, 127, 127, 0.04);
 }
 
+.server-item-header,
+.player-card-header,
+.server-setting-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.player-card {
+  border-radius: 14px;
+}
+
 .arco-typography-secondary {
   color: var(--kz-text-secondary);
 }
@@ -117,7 +130,10 @@ body {
   }
 
   .app-header,
-  .page-toolbar {
+  .page-toolbar,
+  .server-item-header,
+  .player-card-header,
+  .server-setting-row {
     flex-direction: column;
     align-items: flex-start;
   }
@@ -141,4 +157,22 @@ body {
   border-radius: 999px;
   border: 1px solid var(--kz-border);
   background: rgba(127, 127, 127, 0.08);
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.detail-item {
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--kz-border);
+  background: rgba(127, 127, 127, 0.04);
+}
+
+.detail-item-label {
+  display: inline-block;
+  margin-bottom: 8px;
 }

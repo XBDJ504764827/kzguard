@@ -1,4 +1,16 @@
-import type { AppState, ApplicationDraft, ManualWhitelistDraft, ServerDraft, UserSummary } from '../../types';
+import type {
+  AppState,
+  ApplicationDraft,
+  BanRecord,
+  BanRecordOperator,
+  BanRecordUpdateDraft,
+  BanServerPlayerDraft,
+  ManualBanDraft,
+  ManualWhitelistDraft,
+  ServerDraft,
+  ServerSettingsDraft,
+  UserSummary,
+} from '../../types';
 import type { ApiEnvelope, KzGuardApi } from '../contracts';
 import { requestJson } from '../request';
 
@@ -7,14 +19,16 @@ const unwrap = <T,>(payload: ApiEnvelope<T>) => payload.data;
 export const httpApi: KzGuardApi = {
   mode: 'http',
   async loadState() {
-    const [communitiesPayload, whitelistPayload] = await Promise.all([
+    const [communitiesPayload, whitelistPayload, bansPayload] = await Promise.all([
       requestJson<ApiEnvelope<AppState['communities']>>('/communities'),
       requestJson<ApiEnvelope<AppState['whitelist']>>('/whitelist'),
+      requestJson<ApiEnvelope<AppState['bans']>>('/bans'),
     ]);
 
     return {
       communities: unwrap(communitiesPayload),
       whitelist: unwrap(whitelistPayload),
+      bans: unwrap(bansPayload),
     };
   },
   async createCommunity(name) {
@@ -35,6 +49,64 @@ export const httpApi: KzGuardApi = {
     );
 
     return unwrap(payload);
+  },
+  async updateServer(communityId, serverId, draft: ServerSettingsDraft) {
+    const payload = await requestJson<ApiEnvelope<AppState['communities'][number]['servers'][number]>>(
+      `/communities/${communityId}/servers/${serverId}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(draft),
+      },
+    );
+
+    return unwrap(payload);
+  },
+  async kickServerPlayer(communityId, serverId, playerId, reason) {
+    await requestJson<{ message: string }>(`/communities/${communityId}/servers/${serverId}/players/${playerId}/kick`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  },
+  async banServerPlayer(communityId, serverId, playerId, draft: BanServerPlayerDraft, operator: BanRecordOperator) {
+    const payload = await requestJson<ApiEnvelope<BanRecord>>(
+      `/communities/${communityId}/servers/${serverId}/players/${playerId}/ban`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ ...draft, operator }),
+      },
+    );
+
+    return unwrap(payload);
+  },
+  async createManualBanEntry(draft: ManualBanDraft, operator: BanRecordOperator) {
+    const payload = await requestJson<ApiEnvelope<BanRecord>>('/bans/manual', {
+      method: 'POST',
+      body: JSON.stringify({ ...draft, operator }),
+    });
+
+    return unwrap(payload);
+  },
+  async updateBanRecord(banId, draft: BanRecordUpdateDraft, operator: BanRecordOperator) {
+    const payload = await requestJson<ApiEnvelope<BanRecord>>(`/bans/${banId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ ...draft, operator }),
+    });
+
+    return unwrap(payload);
+  },
+  async revokeBanRecord(banId, operator: BanRecordOperator) {
+    const payload = await requestJson<ApiEnvelope<BanRecord>>(`/bans/${banId}/revoke`, {
+      method: 'POST',
+      body: JSON.stringify({ operator }),
+    });
+
+    return unwrap(payload);
+  },
+  async deleteBanRecord(banId, operator: BanRecordOperator) {
+    await requestJson<{ message: string }>(`/bans/${banId}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ operator }),
+    });
   },
   async createApplication(draft: ApplicationDraft) {
     const payload = await requestJson<ApiEnvelope<AppState['whitelist'][number]>>('/whitelist/applications', {

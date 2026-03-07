@@ -13,12 +13,18 @@ import type {
   ApiMode,
   AppState,
   ApplicationDraft,
+  BanRecord,
+  BanRecordOperator,
+  BanRecordUpdateDraft,
+  BanServerPlayerDraft,
   Community,
+  ManualBanDraft,
   ManualWhitelistDraft,
   OperationLog,
   OperationLogAction,
   Server,
   ServerDraft,
+  ServerSettingsDraft,
   ThemeMode,
   UserSummary,
   WebsiteAdmin,
@@ -26,6 +32,7 @@ import type {
   WebsiteUserState,
   WhitelistPlayer,
 } from '../types';
+import { banTypeLabelMap, getBanDurationLabel } from '../utils/ban';
 import { applyTheme, getPreferredTheme, persistTheme } from '../utils/theme';
 
 const WEBSITE_USER_STORAGE_KEY = 'kzguard-website-user-state-v1';
@@ -47,6 +54,13 @@ interface AppStoreContextValue {
   updateWebsiteAdmin: (adminId: string, draft: WebsiteAdminUpdateDraft) => Promise<WebsiteAdmin>;
   addCommunity: (name: string) => Promise<Community>;
   addServer: (communityId: string, draft: ServerDraft) => Promise<Server>;
+  updateServer: (communityId: string, serverId: string, draft: ServerSettingsDraft) => Promise<Server>;
+  kickServerPlayer: (communityId: string, serverId: string, playerId: string, reason: string) => Promise<void>;
+  banServerPlayer: (communityId: string, serverId: string, playerId: string, draft: BanServerPlayerDraft) => Promise<void>;
+  manualBanPlayer: (draft: ManualBanDraft) => Promise<BanRecord>;
+  updateBanRecord: (banId: string, draft: BanRecordUpdateDraft) => Promise<BanRecord>;
+  revokeBanRecord: (banId: string) => Promise<BanRecord>;
+  deleteBanRecord: (banId: string) => Promise<void>;
   approvePlayer: (playerId: string, note?: string) => Promise<void>;
   rejectPlayer: (playerId: string, note?: string) => Promise<void>;
   manualAddPlayer: (draft: ManualWhitelistDraft) => Promise<WhitelistPlayer>;
@@ -58,6 +72,23 @@ const AppStoreContext = createContext<AppStoreContextValue | null>(null);
 const clone = <T,>(value: T): T => structuredClone(value);
 const createId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
 const normalizeText = (value?: string) => value?.trim() || undefined;
+const normalizeServer = (server: Server, fallback?: Partial<Server>): Server => ({
+  ...server,
+  whitelistEnabled: server.whitelistEnabled ?? fallback?.whitelistEnabled ?? false,
+  entryVerificationEnabled: server.entryVerificationEnabled ?? fallback?.entryVerificationEnabled ?? false,
+  onlinePlayers: Array.isArray(server.onlinePlayers) ? server.onlinePlayers : fallback?.onlinePlayers ?? [],
+});
+const getBanOperatorSnapshot = (admin: WebsiteAdmin | null): BanRecordOperator => {
+  if (!admin) {
+    throw new Error('当前没有登录管理员');
+  }
+
+  return {
+    id: admin.id,
+    name: admin.displayName,
+    role: admin.role,
+  };
+};
 
 const getInitialWebsiteUserState = (): WebsiteUserState => {
   if (typeof window === 'undefined') {
@@ -333,7 +364,12 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
   };
 
   const addServer = async (communityId: string, draft: ServerDraft) => {
-    const server = await apiService.createServer(communityId, draft);
+    const createdServer = await apiService.createServer(communityId, draft);
+    const server = normalizeServer(createdServer, {
+      whitelistEnabled: draft.whitelistEnabled,
+      entryVerificationEnabled: draft.entryVerificationEnabled,
+      onlinePlayers: [],
+    });
     const community = state.communities.find((item) => item.id === communityId);
 
     setState((currentState) => ({
@@ -357,6 +393,230 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     );
 
     return server;
+  };
+
+  const updateServer = async (communityId: string, serverId: string, draft: ServerSettingsDraft) => {
+    const community = state.communities.find((item) => item.id === communityId);
+    const currentServer = community?.servers.find((item) => item.id === serverId);
+    const updatedServer = await apiService.updateServer(communityId, serverId, draft);
+    const server = normalizeServer(updatedServer, {
+      ...currentServer,
+      whitelistEnabled: draft.whitelistEnabled,
+      entryVerificationEnabled: draft.entryVerificationEnabled,
+    });
+
+    setState((currentState) => ({
+      ...currentState,
+      communities: currentState.communities.map((communityItem) => {
+        if (communityItem.id !== communityId) {
+          return communityItem;
+        }
+
+        return {
+          ...communityItem,
+          servers: communityItem.servers.map((serverItem) => (serverItem.id === serverId ? server : serverItem)),
+        };
+      }),
+    }));
+    setApiError(null);
+
+    appendOperationLog(
+      'server_updated',
+      `更新了服务器 ${server.name} 的连接参数为 ${server.ip}:${server.port}，白名单${server.whitelistEnabled ? '开启' : '关闭'}，进服验证${server.entryVerificationEnabled ? '开启' : '关闭'}。`,
+    );
+
+    return server;
+  };
+
+  const kickServerPlayer = async (communityId: string, serverId: string, playerId: string, reason: string) => {
+    const community = state.communities.find((item) => item.id === communityId);
+    const server = community?.servers.find((item) => item.id === serverId);
+    const player = server?.onlinePlayers.find((item) => item.id === playerId);
+    const nextReason = reason.trim();
+
+    await apiService.kickServerPlayer(communityId, serverId, playerId, nextReason);
+
+    setState((currentState) => ({
+      ...currentState,
+      communities: currentState.communities.map((communityItem) => {
+        if (communityItem.id !== communityId) {
+          return communityItem;
+        }
+
+        return {
+          ...communityItem,
+          servers: communityItem.servers.map((serverItem) => {
+            if (serverItem.id !== serverId) {
+              return serverItem;
+            }
+
+            return {
+              ...serverItem,
+              onlinePlayers: serverItem.onlinePlayers.filter((item) => item.id !== playerId),
+            };
+          }),
+        };
+      }),
+    }));
+    setApiError(null);
+
+    appendOperationLog(
+      'server_player_kicked',
+      `从服务器 ${server?.name ?? serverId} 踢出了玩家 ${player?.nickname ?? playerId}。原因：${nextReason}`,
+    );
+  };
+
+  const banServerPlayer = async (communityId: string, serverId: string, playerId: string, draft: BanServerPlayerDraft) => {
+    const community = state.communities.find((item) => item.id === communityId);
+    const server = community?.servers.find((item) => item.id === serverId);
+    const player = server?.onlinePlayers.find((item) => item.id === playerId);
+    const reason = draft.reason.trim();
+    const ipAddress = draft.ipAddress ?? player?.ipAddress ?? '未知 IP';
+    const operator = getBanOperatorSnapshot(currentAdmin);
+
+    const ban = await apiService.banServerPlayer(
+      communityId,
+      serverId,
+      playerId,
+      {
+        ...draft,
+        reason,
+        ipAddress,
+      },
+      operator,
+    );
+
+    setState((currentState) => ({
+      ...currentState,
+      communities: currentState.communities.map((communityItem) => {
+        if (communityItem.id !== communityId) {
+          return communityItem;
+        }
+
+        return {
+          ...communityItem,
+          servers: communityItem.servers.map((serverItem) => {
+            if (serverItem.id !== serverId) {
+              return serverItem;
+            }
+
+            return {
+              ...serverItem,
+              onlinePlayers: serverItem.onlinePlayers.filter((item) => item.id !== playerId),
+            };
+          }),
+        };
+      }),
+      bans: [ban, ...currentState.bans],
+    }));
+    setApiError(null);
+
+    appendOperationLog(
+      'server_player_banned',
+      `在服务器 ${ban.serverName} 以${banTypeLabelMap[ban.banType]}封禁了玩家 ${ban.nickname ?? ban.steamId}，IP：${ban.ipAddress ?? '等待玩家下次进服自动回填'}，时长为 ${getBanDurationLabel(ban.durationSeconds)}。原因：${ban.reason}`,
+    );
+  };
+
+  const manualBanPlayer = async (draft: ManualBanDraft) => {
+    const operator = getBanOperatorSnapshot(currentAdmin);
+    const ban = await apiService.createManualBanEntry(
+      {
+        ...draft,
+        nickname: normalizeText(draft.nickname),
+        steamIdentifier: draft.steamIdentifier.trim(),
+        ipAddress: normalizeText(draft.ipAddress),
+        reason: draft.reason.trim(),
+      },
+      operator,
+    );
+
+    setState((currentState) => ({
+      ...currentState,
+      bans: [ban, ...currentState.bans],
+    }));
+    setApiError(null);
+
+    appendOperationLog(
+      'ban_record_manual_created',
+      `手动添加了${banTypeLabelMap[ban.banType]}记录：玩家 ${ban.nickname ?? '待后端匹配'}，Steam 标识 ${ban.steamIdentifier}，IP：${ban.ipAddress ?? '等待玩家下次进服自动回填'}，时长为 ${getBanDurationLabel(ban.durationSeconds)}。原因：${ban.reason}`,
+    );
+
+    return ban;
+  };
+
+  const updateBanRecord = async (banId: string, draft: BanRecordUpdateDraft) => {
+    const currentBan = state.bans.find((item) => item.id === banId);
+
+    if (!currentBan) {
+      throw new Error('未找到要编辑的封禁记录');
+    }
+
+    const updatedBan = await apiService.updateBanRecord(banId, {
+      ...draft,
+      nickname: normalizeText(draft.nickname),
+      steamIdentifier: draft.steamIdentifier.trim(),
+      ipAddress: normalizeText(draft.ipAddress),
+      reason: draft.reason.trim(),
+      serverName: normalizeText(draft.serverName),
+      communityName: normalizeText(draft.communityName),
+    }, getBanOperatorSnapshot(currentAdmin));
+
+    setState((currentState) => ({
+      ...currentState,
+      bans: currentState.bans.map((ban) => (ban.id === banId ? updatedBan : ban)),
+    }));
+    setApiError(null);
+
+    appendOperationLog(
+      'ban_record_updated',
+      `编辑了封禁记录 ${currentBan.nickname ?? currentBan.steamId}，更新为${banTypeLabelMap[updatedBan.banType]}，时长为 ${getBanDurationLabel(updatedBan.durationSeconds)}，原因：${updatedBan.reason}`,
+    );
+
+    return updatedBan;
+  };
+
+  const revokeBanRecord = async (banId: string) => {
+    const currentBan = state.bans.find((item) => item.id === banId);
+
+    if (!currentBan) {
+      throw new Error('未找到要解除的封禁记录');
+    }
+
+    const revokedBan = await apiService.revokeBanRecord(banId, getBanOperatorSnapshot(currentAdmin));
+
+    setState((currentState) => ({
+      ...currentState,
+      bans: currentState.bans.map((ban) => (ban.id === banId ? revokedBan : ban)),
+    }));
+    setApiError(null);
+
+    appendOperationLog(
+      'ban_record_revoked',
+      `解除了玩家 ${revokedBan.nickname ?? revokedBan.steamId} 的封禁，原封禁属性为${banTypeLabelMap[revokedBan.banType]}。`,
+    );
+
+    return revokedBan;
+  };
+
+  const deleteBanRecord = async (banId: string) => {
+    const currentBan = state.bans.find((item) => item.id === banId);
+
+    if (!currentBan) {
+      throw new Error('未找到要删除的封禁记录');
+    }
+
+    await apiService.deleteBanRecord(banId, getBanOperatorSnapshot(currentAdmin));
+
+    setState((currentState) => ({
+      ...currentState,
+      bans: currentState.bans.filter((ban) => ban.id !== banId),
+    }));
+    setApiError(null);
+
+    appendOperationLog(
+      'ban_record_deleted',
+      `删除了封禁记录 ${currentBan.nickname ?? currentBan.steamId}（${banTypeLabelMap[currentBan.banType]}）。`,
+    );
   };
 
   const updatePlayerStatus = async (playerId: string, status: 'approved' | 'rejected', note?: string) => {
@@ -443,6 +703,13 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       updateWebsiteAdmin,
       addCommunity,
       addServer,
+      updateServer,
+      kickServerPlayer,
+      banServerPlayer,
+      manualBanPlayer,
+      updateBanRecord,
+      revokeBanRecord,
+      deleteBanRecord,
       approvePlayer,
       rejectPlayer,
       manualAddPlayer,
