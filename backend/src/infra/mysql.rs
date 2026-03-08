@@ -64,6 +64,22 @@ async fn ensure_servers_column(pool: &MySqlPool, column_name: &str, column_ddl: 
     Ok(())
 }
 
+async fn ensure_ban_records_column(pool: &MySqlPool, column_name: &str, column_ddl: &str) -> AppResult<()> {
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ban_records' AND COLUMN_NAME = ?",
+    )
+    .bind(column_name)
+    .fetch_one(pool)
+    .await?;
+
+    if exists == 0 {
+        let sql = format!("ALTER TABLE ban_records ADD COLUMN {} {}", column_name, column_ddl);
+        sqlx::query(&sql).execute(pool).await?;
+    }
+
+    Ok(())
+}
+
 async fn ensure_server_plugin_tokens(pool: &MySqlPool) -> AppResult<()> {
     let rows = sqlx::query_as::<_, (String, String)>("SELECT id, plugin_token FROM servers")
         .fetch_all(pool)
@@ -173,6 +189,7 @@ pub(crate) async fn create_tables(pool: &MySqlPool) -> AppResult<()> {
           reason TEXT NOT NULL,
           duration_seconds INT NULL,
           banned_at DATETIME(3) NOT NULL,
+          server_id VARCHAR(64) NULL,
           server_name VARCHAR(255) NOT NULL,
           community_name VARCHAR(255) NULL,
           operator_id VARCHAR(64) NOT NULL,
@@ -190,6 +207,8 @@ pub(crate) async fn create_tables(pool: &MySqlPool) -> AppResult<()> {
         "#,
     )
     .await?;
+
+    ensure_ban_records_column(pool, "server_id", "VARCHAR(64) NULL AFTER banned_at").await?;
 
     pool.execute(
         r#"
@@ -390,9 +409,9 @@ where
         r#"
         INSERT INTO ban_records (
           id, nickname, ban_type, status, steam_identifier, steam_id64, steam_id, steam_id3, ip_address,
-          reason, duration_seconds, banned_at, server_name, community_name, operator_id, operator_name,
+          reason, duration_seconds, banned_at, server_id, server_name, community_name, operator_id, operator_name,
           operator_role, source, updated_at, revoked_at, revoked_by_operator_id, revoked_by_operator_name, revoked_by_operator_role
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&ban.id)
@@ -407,6 +426,7 @@ where
     .bind(&ban.reason)
     .bind(ban.duration_seconds)
     .bind(iso_to_mysql(&ban.banned_at))
+    .bind(&ban.server_id)
     .bind(&ban.server_name)
     .bind(&ban.community_name)
     .bind(&ban.operator_id)

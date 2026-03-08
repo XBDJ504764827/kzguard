@@ -709,7 +709,9 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
 
     appendOperationLog(
       'ban_record_revoked',
-      `解除了玩家 ${revokedBan.nickname ?? revokedBan.steamId} 的封禁，原封禁属性为${banTypeLabelMap[revokedBan.banType]}。`,
+      currentBan.status === 'revoked' && currentBan.source === 'server_action'
+        ? `重新同步了玩家 ${revokedBan.nickname ?? revokedBan.steamId} 在游戏服上的本地解封。`
+        : `解除了玩家 ${revokedBan.nickname ?? revokedBan.steamId} 的封禁，原封禁属性为${banTypeLabelMap[revokedBan.banType]}。`,
     );
 
     return revokedBan;

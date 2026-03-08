@@ -89,11 +89,13 @@ public void OnClientPostAdminCheck(int client)
 
 public void OnClientDisconnect_Post(int client)
 {
-	if (!IsFakeClient(client))
+	if (client <= 0 || client > MaxClients)
 	{
-		g_ClientAccessCheckInFlight[client] = false;
-		QueuePresenceReport(1.0);
+		return;
 	}
+
+	g_ClientAccessCheckInFlight[client] = false;
+	QueuePresenceReport(1.0);
 }
 
 public Action Command_KickUserId(int args)
@@ -484,23 +486,58 @@ public void OnAccessCheckCompleted(Handle request, bool failure, bool requestSuc
 		return;
 	}
 
-	char body[1024];
-	if (!SteamWorks_GetHTTPResponseBodyData(request, body, sizeof(body)))
-	{
-		LogError("[KZ Guard] 进服校验响应体读取失败，改用本地缓存：client=%N", client);
-		HandleAccessCheckFallback(client);
-		delete request;
-		return;
-	}
-
 	bool allow = true;
 	char message[256];
-	if (!ParseAccessCheckResponse(body, allow, message, sizeof(message)))
+	char body[1024];
+	if (SteamWorks_GetHTTPResponseBodyData(request, body, sizeof(body)))
 	{
-		LogError("[KZ Guard] 进服校验响应解析失败，改用本地缓存：client=%N body=%s", client, body);
-		HandleAccessCheckFallback(client);
-		delete request;
-		return;
+		if (!ParseAccessCheckResponse(body, allow, message, sizeof(message)))
+		{
+			LogError("[KZ Guard] 进服校验响应解析失败，改用本地缓存：client=%N body=%s", client, body);
+			HandleAccessCheckFallback(client);
+			delete request;
+			return;
+		}
+	}
+	else
+	{
+		char tempPath[PLATFORM_MAX_PATH];
+		BuildAccessCheckTempFilePath(userId, tempPath, sizeof(tempPath));
+
+		if (!SteamWorks_WriteHTTPResponseBodyToFile(request, tempPath))
+		{
+			LogError("[KZ Guard] 进服校验响应体读取失败，且写入临时文件失败：client=%N", client);
+			HandleAccessCheckFallback(client);
+			delete request;
+			return;
+		}
+
+		int bodySize = FileSize(tempPath);
+		int bufferSize = bodySize + 1;
+		if (bufferSize < 2)
+		{
+			bufferSize = 2;
+		}
+
+		char[] tempBody = new char[bufferSize];
+		bool loaded = bodySize >= 0 && ReadTextFileToBuffer(tempPath, tempBody, bufferSize);
+		DeleteFile(tempPath);
+
+		if (!loaded)
+		{
+			LogError("[KZ Guard] 进服校验响应体读取失败，改用本地缓存：client=%N", client);
+			HandleAccessCheckFallback(client);
+			delete request;
+			return;
+		}
+
+		if (!ParseAccessCheckResponse(tempBody, allow, message, sizeof(message)))
+		{
+			LogError("[KZ Guard] 进服校验响应解析失败，改用本地缓存：client=%N body=%s", client, tempBody);
+			HandleAccessCheckFallback(client);
+			delete request;
+			return;
+		}
 	}
 
 	if (!allow)
@@ -909,6 +946,56 @@ void BuildAccessSyncTempFilePath(char[] path, int maxlen)
 	}
 
 	BuildPath(Path_SM, path, maxlen, "data/kzguard_access_sync_%s.tmp.kv", g_InstancePort);
+}
+
+void BuildAccessCheckTempFilePath(int userId, char[] path, int maxlen)
+{
+	if (userId > 0)
+	{
+		BuildPath(Path_SM, path, maxlen, "data/kzguard_access_check_%d.tmp.txt", userId);
+		return;
+	}
+
+	BuildPath(Path_SM, path, maxlen, "data/kzguard_access_check.tmp.txt");
+}
+
+bool ReadTextFileToBuffer(const char[] path, char[] output, int maxlen)
+{
+	output[0] = '\0';
+
+	int fileSize = FileSize(path);
+	if (fileSize < 0)
+	{
+		return false;
+	}
+
+	if (fileSize == 0)
+	{
+		return true;
+	}
+
+	File file = OpenFile(path, "rb");
+	if (file == null)
+	{
+		return false;
+	}
+
+	int readCount = file.ReadString(output, maxlen, fileSize);
+	delete file;
+
+	if (readCount < 0)
+	{
+		output[0] = '\0';
+		return false;
+	}
+
+	if (readCount >= maxlen)
+	{
+		readCount = maxlen - 1;
+	}
+
+	output[readCount] = '\0';
+	return true;
 }
 
 bool MergeSyncedSnapshotIntoSharedCache(const char[] snapshotPath)

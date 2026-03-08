@@ -31,6 +31,7 @@ pub(crate) fn map_ban_record(row: DbBanRecord) -> BanRecord {
         reason: row.reason,
         duration_seconds: row.duration_seconds,
         banned_at: naive_to_iso(row.banned_at),
+        server_id: row.server_id,
         server_name: row.server_name,
         community_name: row.community_name,
         operator_id: row.operator_id,

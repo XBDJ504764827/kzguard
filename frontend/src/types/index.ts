@@ -104,6 +104,7 @@ export interface BanRecord {
   reason: string;
   durationSeconds?: number;
   bannedAt: string;
+  serverId?: string;
   serverName: string;
   communityName?: string;
   operatorId: string;

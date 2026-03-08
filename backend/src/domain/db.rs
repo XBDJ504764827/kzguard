@@ -66,6 +66,7 @@ pub(crate) struct DbBanRecord {
     pub(crate) reason: String,
     pub(crate) duration_seconds: Option<i32>,
     pub(crate) banned_at: NaiveDateTime,
+    pub(crate) server_id: Option<String>,
     pub(crate) server_name: String,
     pub(crate) community_name: Option<String>,
     pub(crate) operator_id: String,

@@ -36,6 +36,13 @@ struct PluginServerContext {
     plugin_token: String,
 }
 
+#[derive(Debug, FromRow)]
+struct BanRecordServerTarget {
+    ip: String,
+    port: i32,
+    rcon_password: String,
+}
+
 pub(crate) async fn ban_server_player(
     pool: &MySqlPool,
     redis: &RedisClient,
@@ -68,6 +75,7 @@ pub(crate) async fn ban_server_player(
             .or_else(|| Some(target.player.ip_address.clone())),
         draft.reason.clone(),
         draft.duration_seconds,
+        Some(server_id.to_string()),
         target.server_name.clone(),
         Some(target.community_name.clone()),
         &operator,
@@ -146,6 +154,7 @@ pub(crate) async fn create_plugin_ban_entry(
         ip_address,
         draft.reason,
         draft.duration_seconds,
+        Some(draft.server_id.trim().to_string()),
         server.name.clone(),
         Some(server.community_name.clone()),
         &operator,
@@ -263,6 +272,7 @@ pub(crate) async fn create_manual_ban_entry(
         draft.ip_address,
         draft.reason,
         draft.duration_seconds,
+        None,
         "手动录入（未关联服务器）".to_string(),
         None,
         &operator,
@@ -332,6 +342,7 @@ pub(crate) async fn update_ban_record(
         reason: draft.reason.trim().to_string(),
         duration_seconds: draft.duration_seconds,
         banned_at: existing.banned_at,
+        server_id: existing.server_id,
         server_name: trim_to_none(draft.server_name).unwrap_or(existing.server_name),
         community_name: trim_to_none(draft.community_name),
         operator_id: existing.operator_id,
@@ -403,6 +414,30 @@ pub(crate) async fn revoke_ban_record(
 ) -> AppResult<BanRecord> {
     let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
     let existing = get_ban_record(pool, ban_id).await?;
+
+    if existing.source == "server_action" {
+        sync_server_unban_for_ban(pool, &existing).await?;
+
+        if existing.status == "revoked" {
+            append_operation_log(
+                pool,
+                "ban_record_revoked",
+                format!(
+                    "重新同步了玩家 {} 在游戏服 {} 的本地解封。",
+                    existing
+                        .nickname
+                        .clone()
+                        .unwrap_or_else(|| existing.steam_id.clone()),
+                    existing.server_name,
+                ),
+                &operator,
+            )
+            .await?;
+
+            return Ok(existing);
+        }
+    }
+
     let revoked = revoke_existing_ban_record_with_operator(pool, existing, &operator).await?;
 
     append_operation_log(
@@ -479,6 +514,7 @@ pub(crate) fn create_ban_record(
     ip_address: Option<String>,
     reason: String,
     duration_seconds: Option<i32>,
+    server_id: Option<String>,
     server_name: String,
     community_name: Option<String>,
     operator: &OperatorSnapshot,
@@ -493,6 +529,7 @@ pub(crate) fn create_ban_record(
         ip_address,
         reason,
         duration_seconds,
+        server_id,
         server_name,
         community_name,
         operator,
@@ -508,6 +545,7 @@ fn build_ban_record(
     ip_address: Option<String>,
     reason: String,
     duration_seconds: Option<i32>,
+    server_id: Option<String>,
     server_name: String,
     community_name: Option<String>,
     operator: &OperatorSnapshot,
@@ -528,6 +566,7 @@ fn build_ban_record(
         reason: reason.trim().to_string(),
         duration_seconds,
         banned_at: now.clone(),
+        server_id: trim_to_none(server_id),
         server_name,
         community_name,
         operator_id: operator.id.clone(),
@@ -721,6 +760,150 @@ async fn revoke_existing_ban_record_with_operator(
         revoked_by_operator_role: Some(operator.role.clone()),
         ..existing
     })
+}
+
+async fn sync_server_unban_for_ban(pool: &MySqlPool, ban: &BanRecord) -> AppResult<()> {
+    let Some(server) = resolve_server_target_for_ban(pool, ban).await? else {
+        return Ok(());
+    };
+
+    let identity = if ban.ban_type == "ip" {
+        ban.ip_address
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                AppError::http(StatusCode::BAD_REQUEST, "该 IP 封禁记录缺少 IP 地址，无法同步本地解封")
+            })?
+            .to_string()
+    } else {
+        ban.steam_id.trim().to_string()
+    };
+
+    let command = format!("sm_unban {}", quote_rcon_argument(&identity));
+    let response = execute_rcon_command(&server.ip, server.port, &server.rcon_password, &command)
+        .await
+        .map_err(|message| AppError::http(StatusCode::BAD_REQUEST, message))?;
+
+    ensure_kzguard_command_available(&response)?;
+    ensure_server_unban_succeeded(&response)?;
+
+    Ok(())
+}
+
+async fn resolve_server_target_for_ban(
+    pool: &MySqlPool,
+    ban: &BanRecord,
+) -> AppResult<Option<BanRecordServerTarget>> {
+    if ban.source != "server_action" {
+        return Ok(None);
+    }
+
+    if let Some(server_id) = ban
+        .server_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let server = sqlx::query_as::<_, BanRecordServerTarget>(
+            r#"
+            SELECT ip, port, rcon_password
+              FROM servers
+             WHERE id = ?
+            "#,
+        )
+        .bind(server_id)
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some(server) = server {
+            return Ok(Some(server));
+        }
+    }
+
+    if let Some(community_name) = ban
+        .community_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let scoped = sqlx::query_as::<_, BanRecordServerTarget>(
+            r#"
+            SELECT s.ip, s.port, s.rcon_password
+              FROM servers s
+              INNER JOIN communities c ON c.id = s.community_id
+             WHERE s.name = ? AND c.name = ?
+             ORDER BY s.rcon_verified_at DESC
+            "#,
+        )
+        .bind(&ban.server_name)
+        .bind(community_name)
+        .fetch_all(pool)
+        .await?;
+
+        match scoped.len() {
+            1 => return Ok(scoped.into_iter().next()),
+            length if length > 1 => {
+                return Err(AppError::http(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "存在多个名为 {} 的游戏服，无法唯一定位本地解封目标，请先在服务器控制台执行 sm_unban。",
+                        ban.server_name,
+                    ),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    let candidates = sqlx::query_as::<_, BanRecordServerTarget>(
+        r#"
+        SELECT ip, port, rcon_password
+          FROM servers
+         WHERE name = ?
+         ORDER BY rcon_verified_at DESC
+        "#,
+    )
+    .bind(&ban.server_name)
+    .fetch_all(pool)
+    .await?;
+
+    match candidates.len() {
+        0 => Err(AppError::http(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "未找到封禁记录对应的游戏服 {}，无法同步本地解封，请先在服务器控制台执行 sm_unban。",
+                ban.server_name,
+            ),
+        )),
+        1 => Ok(candidates.into_iter().next()),
+        _ => Err(AppError::http(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "存在多个名为 {} 的游戏服，无法唯一定位本地解封目标，请先在服务器控制台执行 sm_unban。",
+                ban.server_name,
+            ),
+        )),
+    }
+}
+
+fn ensure_server_unban_succeeded(response: &str) -> AppResult<()> {
+    let trimmed = response.trim();
+    if trimmed.contains("本地解封失败")
+        || trimmed.contains("请输入要解封")
+        || trimmed.contains("用法: sm_unban")
+    {
+        return Err(AppError::http(
+            StatusCode::BAD_REQUEST,
+            if trimmed.is_empty() {
+                "游戏服本地解封失败，请在服务器控制台执行 sm_unban 再重试".to_string()
+            } else {
+                trimmed.to_string()
+            },
+        ));
+    }
+
+    Ok(())
 }
 
 fn normalize_ban_status_filter(status: Option<String>) -> AppResult<Option<String>> {

@@ -119,6 +119,8 @@ pub(crate) struct BanRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) duration_seconds: Option<i32>,
     pub(crate) banned_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) server_id: Option<String>,
     pub(crate) server_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) community_name: Option<String>,

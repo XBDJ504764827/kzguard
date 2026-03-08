@@ -753,7 +753,7 @@ fn build_access_message(
         return "当前服务器未开启白名单与进服验证，允许进入。".to_string();
     }
 
-    if is_whitelisted {
+    if whitelist_enabled && is_whitelisted {
         return "你已在白名单中，允许进入服务器。".to_string();
     }
 
@@ -771,7 +771,7 @@ fn build_access_message(
     match (whitelist_enabled, entry_verification_enabled) {
         (true, false) => "当前服务器仅允许白名单玩家进入。".to_string(),
         (false, true) => format!(
-            "未满足进服验证要求：最低 rating {}，最低 Steam 等级 {}。",
+            "当前服务器未启用白名单豁免，你未满足最低 rating {} 与最低 Steam 等级 {} 的进服要求。",
             min_entry_rating, min_steam_level
         ),
         (true, true) => format!(

@@ -262,6 +262,10 @@ export const BanManagementPage = () => {
             <Button size="small" status="warning" onClick={() => setConfirmTarget({ action: 'revoke', banId: record.id })}>
               解除封禁
             </Button>
+          ) : record.source === 'server_action' ? (
+            <Button size="small" status="warning" onClick={() => setConfirmTarget({ action: 'revoke', banId: record.id })}>
+              重试解封同步
+            </Button>
           ) : null}
           <Button size="small" status="danger" onClick={() => setConfirmTarget({ action: 'delete', banId: record.id })}>
             删除
@@ -342,7 +346,11 @@ export const BanManagementPage = () => {
     try {
       if (confirmTarget.action === 'revoke') {
         await revokeBanRecord(confirmTarget.banId);
-        Message.success(`已解除 ${confirmBan.nickname ?? confirmBan.steamId} 的封禁`);
+        Message.success(
+          confirmBan.status === 'revoked'
+            ? `已重新同步 ${confirmBan.nickname ?? confirmBan.steamId} 的本地解封`
+            : `已解除 ${confirmBan.nickname ?? confirmBan.steamId} 的封禁`,
+        );
       } else {
         await deleteBanRecord(confirmTarget.banId);
         Message.success('封禁记录已删除');
@@ -594,7 +602,7 @@ export const BanManagementPage = () => {
       </Modal>
 
       <Modal
-        title={confirmTarget?.action === 'revoke' ? '解除封禁' : '删除封禁记录'}
+        title={confirmTarget?.action === 'revoke' ? (confirmBan?.status === 'revoked' ? '重试解封同步' : '解除封禁') : '删除封禁记录'}
         visible={Boolean(confirmTarget)}
         confirmLoading={submittingConfirm}
         okButtonProps={{ status: confirmTarget?.action === 'delete' ? 'danger' : 'warning' }}
@@ -605,7 +613,9 @@ export const BanManagementPage = () => {
       >
         <Typography.Text>
           {confirmTarget?.action === 'revoke'
-            ? `确认解除 ${confirmBan?.nickname ?? confirmBan?.steamId ?? '该玩家'} 的封禁吗？解除后将保留历史记录。`
+            ? confirmBan?.status === 'revoked'
+              ? `确认重新同步 ${confirmBan?.nickname ?? confirmBan?.steamId ?? '该玩家'} 在游戏服上的本地解封吗？这会再次调用服务器的 sm_unban。`
+              : `确认解除 ${confirmBan?.nickname ?? confirmBan?.steamId ?? '该玩家'} 的封禁吗？解除后将保留历史记录。`
             : `确认删除 ${confirmBan?.nickname ?? confirmBan?.steamId ?? '该记录'} 的封禁记录吗？删除后将无法恢复。`}
         </Typography.Text>
       </Modal>
