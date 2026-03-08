@@ -17,7 +17,10 @@ use crate::{
     support::{
         convert::trim_to_none,
         ids::prefixed_id,
-        steam::{resolve_steam_identifiers_strict, resolve_steam_profile, steam_vanity_regex},
+        steam::{
+            resolve_steam_identifiers_strict, resolve_steam_profile,
+            resolve_steam_profile_with_web_api, steam_vanity_regex,
+        },
         time::{iso_to_mysql, now_iso},
         validation::{
             require_non_empty, validate_application_draft, validate_manual_whitelist_draft,
@@ -76,20 +79,14 @@ pub(crate) async fn get_public_whitelist_history(
 
 pub(crate) async fn create_public_application(
     pool: &MySqlPool,
+    http_client: &reqwest::Client,
+    steam_web_api_key: Option<&str>,
     draft: PublicWhitelistApplicationDraft,
 ) -> AppResult<WhitelistPlayer> {
     require_non_empty(&draft.steam_identifier, "请输入玩家 Steam 标识")?;
 
-    let resolved_profile = resolve_steam_profile(&draft.steam_identifier).await?;
-    let history = build_whitelist_application_history(
-        pool,
-        ResolvedSteamIdentifiers {
-            steam_id64: resolved_profile.steam_id64.clone(),
-            steam_id: resolved_profile.steam_id.clone(),
-            steam_id3: resolved_profile.steam_id3.clone(),
-        },
-    )
-    .await?;
+    let identifiers = resolve_history_identifiers(&draft.steam_identifier).await?;
+    let history = build_whitelist_application_history(pool, identifiers.clone()).await?;
 
     if history.duplicate_blocked {
         return Err(AppError::http(
@@ -100,18 +97,30 @@ pub(crate) async fn create_public_application(
         ));
     }
 
+    let resolved_profile = if trim_to_none(draft.nickname.clone()).is_none() {
+        resolve_steam_profile_with_web_api(http_client, steam_web_api_key, &draft.steam_identifier)
+            .await
+            .ok()
+    } else {
+        None
+    };
+
     let nickname = trim_to_none(draft.nickname)
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| resolved_profile.nickname.clone());
-
-    require_non_empty(&nickname, "请输入游戏名称")?;
+        .or_else(|| {
+            resolved_profile
+                .as_ref()
+                .map(|profile| profile.nickname.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .ok_or_else(|| AppError::http(StatusCode::BAD_REQUEST, "请输入游戏名称"))?;
 
     let player = WhitelistPlayer {
         id: prefixed_id("player"),
         nickname,
-        steam_id64: resolved_profile.steam_id64,
-        steam_id: resolved_profile.steam_id,
-        steam_id3: resolved_profile.steam_id3,
+        steam_id64: identifiers.steam_id64,
+        steam_id: identifiers.steam_id,
+        steam_id3: identifiers.steam_id3,
         contact: trim_to_none(draft.contact),
         note: trim_to_none(draft.note),
         status: "pending".to_string(),

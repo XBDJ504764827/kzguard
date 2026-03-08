@@ -19,13 +19,19 @@ use crate::{
         },
     },
     state::SharedState,
-    support::steam::resolve_steam_profile,
+    support::steam::resolve_steam_profile_with_web_api,
 };
 
 pub(crate) async fn resolve_public_steam_handler(
+    State(state): State<SharedState>,
     Query(query): Query<PublicSteamResolveQuery>,
 ) -> AppResult<Json<ApiEnvelope<ResolvedSteamProfile>>> {
-    let profile = resolve_steam_profile(&query.identifier).await?;
+    let profile = resolve_steam_profile_with_web_api(
+        &state.http_client,
+        state.access_control.steam_web_api_key.as_deref(),
+        &query.identifier,
+    )
+    .await?;
     Ok(Json(ApiEnvelope::new(profile)))
 }
 
@@ -49,7 +55,13 @@ pub(crate) async fn create_public_whitelist_application_handler(
     State(state): State<SharedState>,
     Json(draft): Json<PublicWhitelistApplicationDraft>,
 ) -> AppResult<impl IntoResponse> {
-    let player = whitelist::create_public_application(&state.pool, draft).await?;
+    let player = whitelist::create_public_application(
+        &state.pool,
+        &state.http_client,
+        state.access_control.steam_web_api_key.as_deref(),
+        draft,
+    )
+    .await?;
     Ok((
         StatusCode::CREATED,
         Json(ApiEnvelope::with_message(player, "白名单申请已提交，等待管理员审核")),

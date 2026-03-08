@@ -23,12 +23,42 @@ import { getErrorMessage } from '../utils/error';
 const Row = Grid.Row;
 const Col = Grid.Col;
 
+const STEAM_ID64_BASE = 76561197960265728n;
+
 const createEmptyDraft = (): PublicWhitelistApplicationDraft => ({
   nickname: '',
   steamIdentifier: '',
   contact: '',
   note: '',
 });
+
+const steamId64Pattern = /^\d{17}$/;
+
+const isSteamId64 = (value: string) => steamId64Pattern.test(value.trim());
+
+const buildOfflineResolvedProfile = (steamId64: string): ResolvedSteamProfile | null => {
+  const trimmed = steamId64.trim();
+  if (!isSteamId64(trimmed)) {
+    return null;
+  }
+
+  const steamId64Value = BigInt(trimmed);
+  if (steamId64Value < STEAM_ID64_BASE) {
+    return null;
+  }
+
+  const accountId = steamId64Value - STEAM_ID64_BASE;
+  const y = accountId % 2n;
+  const z = (accountId - y) / 2n;
+
+  return {
+    nickname: '',
+    steamId64: trimmed,
+    steamId: `STEAM_1:${y.toString()}:${z.toString()}`,
+    steamId3: `[U:1:${accountId.toString()}]`,
+    profileUrl: `https://steamcommunity.com/profiles/${trimmed}`,
+  };
+};
 
 const statusTextMap: Record<WhitelistStatus, string> = {
   approved: '已通过',
@@ -75,6 +105,7 @@ export const PublicWhitelistApplyPage = () => {
   const [resolvedProfile, setResolvedProfile] = useState<ResolvedSteamProfile | null>(null);
   const [historyInfo, setHistoryInfo] = useState<WhitelistApplicationHistory | null>(null);
   const [ownershipConfirmed, setOwnershipConfirmed] = useState<'' | 'yes' | 'no'>('');
+  const [manualFallbackMode, setManualFallbackMode] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -91,6 +122,17 @@ export const PublicWhitelistApplyPage = () => {
     };
   }, [historyInfo]);
 
+  const offlineResolvedProfile = useMemo(() => {
+    if (!manualFallbackMode) {
+      return null;
+    }
+
+    return buildOfflineResolvedProfile(draft.steamIdentifier);
+  }, [draft.steamIdentifier, manualFallbackMode]);
+
+  const activeProfile = resolvedProfile ?? offlineResolvedProfile;
+  const offlineFallbackReady = manualFallbackMode && Boolean(offlineResolvedProfile);
+
   const handleResolveProfile = async () => {
     if (!draft.steamIdentifier?.trim()) {
       Message.warning('请输入 SteamID64、SteamID、SteamID3 或个人资料链接');
@@ -102,6 +144,7 @@ export const PublicWhitelistApplyPage = () => {
     try {
       const profile = await publicApi.resolveSteamProfile(draft.steamIdentifier);
       setResolvedProfile(profile);
+      setManualFallbackMode(false);
       setOwnershipConfirmed('');
       setDraft((currentDraft) => ({
         ...currentDraft,
@@ -117,26 +160,52 @@ export const PublicWhitelistApplyPage = () => {
           Message.warning(history.blockReason || '该 Steam 账号暂不允许重复提交');
         } else if (history.historyHint) {
           Message.info(history.historyHint);
-        } else {
+        } else if (profile.nickname.trim()) {
           Message.success('已查询到 Steam 玩家信息，请确认是否为本人');
+        } else {
+          Message.warning('已解析 Steam 标识，但未能自动获取游戏名称，请确认本人后在第三步手动填写');
         }
       } catch (historyError) {
         setHistoryInfo(null);
         Message.warning(getErrorMessage(historyError, '已查询到玩家信息，但历史记录加载失败，提交时后端仍会进行重复校验'));
       }
     } catch (error) {
+      const trimmedIdentifier = draft.steamIdentifier.trim();
+      const fallbackAvailable = isSteamId64(trimmedIdentifier);
+
       setResolvedProfile(null);
-      setHistoryInfo(null);
       setOwnershipConfirmed('');
-      Message.error(getErrorMessage(error, 'Steam 玩家信息查询失败'));
+      setDraft((currentDraft) => ({
+        ...currentDraft,
+        steamIdentifier: trimmedIdentifier,
+      }));
+
+      if (fallbackAvailable) {
+        setManualFallbackMode(true);
+
+        try {
+          const history = await publicApi.getWhitelistHistory(trimmedIdentifier);
+          setHistoryInfo(history);
+        } catch {
+          setHistoryInfo(null);
+        }
+
+        Message.warning(
+          `Steam 玩家信息自动查询失败：${getErrorMessage(error, '上游服务暂时不可用')}。已切换到离线兜底模式，请手动填写游戏名称并确认该 SteamID64 属于本人。`,
+        );
+      } else {
+        setManualFallbackMode(false);
+        setHistoryInfo(null);
+        Message.error(getErrorMessage(error, 'Steam 玩家信息查询失败'));
+      }
     } finally {
       setResolving(false);
     }
   };
 
   const handleSubmitApplication = async () => {
-    if (!resolvedProfile) {
-      Message.warning('请先查询并确认 Steam 玩家信息');
+    if (!resolvedProfile && !offlineFallbackReady) {
+      Message.warning('请先查询并确认 Steam 玩家信息；若自动查询失败，可改用 SteamID64 离线兜底模式');
       return;
     }
 
@@ -146,7 +215,7 @@ export const PublicWhitelistApplyPage = () => {
     }
 
     if (ownershipConfirmed !== 'yes') {
-      Message.warning('请确认查询到的玩家确实是本人后再提交申请');
+      Message.warning(offlineFallbackReady ? '请确认手动填写的 SteamID64 确实属于本人后再提交申请' : '请确认查询到的玩家确实是本人后再提交申请');
       return;
     }
 
@@ -168,6 +237,7 @@ export const PublicWhitelistApplyPage = () => {
       setResolvedProfile(null);
       setHistoryInfo(null);
       setOwnershipConfirmed('');
+      setManualFallbackMode(false);
     } catch (error) {
       Message.error(getErrorMessage(error, '白名单申请提交失败'));
     } finally {
@@ -184,7 +254,7 @@ export const PublicWhitelistApplyPage = () => {
               <Alert
                 type="info"
                 showIcon
-                content="支持 SteamID64、SteamID、SteamID3 或 Steam 个人资料链接。后端会自动转换并查询游戏名称。"
+                content="支持 SteamID64、SteamID、SteamID3 或 Steam 个人资料链接。后端会自动转换标识并尽量查询游戏名称；若自动查询失败且你手里有 SteamID64，可切换离线兜底模式继续提交。"
               />
 
               <Space direction="vertical" size="medium" style={{ width: '100%' }}>
@@ -197,6 +267,7 @@ export const PublicWhitelistApplyPage = () => {
                     setResolvedProfile(null);
                     setHistoryInfo(null);
                     setOwnershipConfirmed('');
+                    setManualFallbackMode(false);
                   }}
                   onPressEnter={() => {
                     void handleResolveProfile();
@@ -207,18 +278,32 @@ export const PublicWhitelistApplyPage = () => {
                 </Button>
               </Space>
 
-              {resolvedProfile ? (
+              {activeProfile ? (
                 <Space direction="vertical" size="medium" style={{ width: '100%' }}>
                   <div className="detail-grid">
-                    {renderProfileField('游戏名称', resolvedProfile.nickname)}
-                    {renderProfileField('SteamID64', resolvedProfile.steamId64)}
-                    {renderProfileField('SteamID', resolvedProfile.steamId)}
-                    {renderProfileField('SteamID3', resolvedProfile.steamId3)}
-                    {renderProfileField('资料链接', resolvedProfile.profileUrl)}
+                    {renderProfileField('游戏名称', activeProfile.nickname || '未自动获取，请在下方手动填写')}
+                    {renderProfileField('SteamID64', activeProfile.steamId64)}
+                    {renderProfileField('SteamID', activeProfile.steamId)}
+                    {renderProfileField('SteamID3', activeProfile.steamId3)}
+                    {renderProfileField('资料链接', activeProfile.profileUrl)}
                   </div>
 
                   <Card title="第二步：确认是否为本人">
                     <Space direction="vertical" size="medium" style={{ width: '100%' }}>
+                      {offlineFallbackReady ? (
+                        <Alert
+                          type="warning"
+                          showIcon
+                          content="当前处于离线兜底模式：已跳过外部 Steam 玩家信息查询，请确认该 SteamID64 属于本人，并在第三步手动填写游戏名称。"
+                        />
+                      ) : null}
+                      {!activeProfile.nickname.trim() ? (
+                        <Alert
+                          type="warning"
+                          showIcon
+                          content="当前仅完成 Steam 标识解析，未能自动读取游戏名称；确认本人后，请在第三步手动填写游戏名称。"
+                        />
+                      ) : null}
                       <Radio.Group
                         type="button"
                         value={ownershipConfirmed}
@@ -226,10 +311,16 @@ export const PublicWhitelistApplyPage = () => {
                           const nextValue = value as '' | 'yes' | 'no';
                           setOwnershipConfirmed(nextValue);
                           if (nextValue === 'yes') {
-                            setDraft((currentDraft) => ({
-                              ...currentDraft,
-                              nickname: resolvedProfile.nickname,
-                            }));
+                            if (activeProfile.nickname.trim()) {
+                              setDraft((currentDraft) => ({
+                                ...currentDraft,
+                                nickname: activeProfile.nickname,
+                              }));
+                            } else if (offlineFallbackReady) {
+                              Message.info('已进入离线兜底模式，请在下方手动填写游戏名称后提交');
+                            } else {
+                              Message.warning('未能自动获取游戏名称，请在下方手动填写后再提交');
+                            }
                           }
                         }}
                       >
@@ -237,7 +328,15 @@ export const PublicWhitelistApplyPage = () => {
                         <Radio value="no">不是本人</Radio>
                       </Radio.Group>
                       {ownershipConfirmed === 'yes' ? (
-                        <Alert type="success" showIcon content="已自动将查询到的游戏名称填入下方表单。" />
+                        <Alert
+                          type="success"
+                          showIcon
+                          content={
+                            activeProfile.nickname.trim()
+                              ? '已自动将查询到的游戏名称填入下方表单。'
+                              : '已完成本人确认，请在下方手动填写游戏名称后提交。'
+                          }
+                        />
                       ) : null}
                       {ownershipConfirmed === 'no' ? (
                         <Alert type="warning" showIcon content="请确认输入的 Steam 标识是否正确；若不是本人，请勿继续提交。" />
@@ -298,7 +397,13 @@ export const PublicWhitelistApplyPage = () => {
               </Space>
 
               <Space wrap>
-                {resolvedProfile ? <Tag color="green">已解析 Steam 信息</Tag> : <Tag color="orange">等待解析 Steam 信息</Tag>}
+                {resolvedProfile ? (
+                  <Tag color="green">已解析 Steam 信息</Tag>
+                ) : offlineFallbackReady ? (
+                  <Tag color="purple">离线兜底模式</Tag>
+                ) : (
+                  <Tag color="orange">等待解析 Steam 信息</Tag>
+                )}
                 {ownershipConfirmed === 'yes' ? <Tag color="green">已确认本人</Tag> : <Tag color="red">未完成本人确认</Tag>}
                 {historyInfo?.duplicateBlocked ? <Tag color="red">已触发重复申请拦截</Tag> : null}
               </Space>
