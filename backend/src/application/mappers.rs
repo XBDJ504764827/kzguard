@@ -1,13 +1,38 @@
 use crate::{
     domain::{db::*, models::*},
+    support::steam::resolve_steam_identifiers_strict,
     support::time::naive_to_iso,
 };
 
 pub(crate) fn map_whitelist_player(row: DbWhitelistPlayer) -> WhitelistPlayer {
+    let resolved = resolve_steam_identifiers_strict(&row.steam_id).ok();
+    let steam_id64 = if !row.steam_id64.trim().is_empty() {
+        row.steam_id64
+    } else {
+        resolved
+            .as_ref()
+            .map(|value| value.steam_id64.clone())
+            .unwrap_or_default()
+    };
+    let steam_id = resolved
+        .as_ref()
+        .map(|value| value.steam_id.clone())
+        .unwrap_or(row.steam_id);
+    let steam_id3 = if !row.steam_id3.trim().is_empty() {
+        row.steam_id3
+    } else {
+        resolved
+            .as_ref()
+            .map(|value| value.steam_id3.clone())
+            .unwrap_or_default()
+    };
+
     WhitelistPlayer {
         id: row.id,
         nickname: row.nickname,
-        steam_id: row.steam_id,
+        steam_id64,
+        steam_id,
+        steam_id3,
         contact: row.contact,
         note: row.note,
         status: row.status,

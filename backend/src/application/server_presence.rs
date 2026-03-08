@@ -7,6 +7,7 @@ use crate::{
     http::requests::{ServerPresencePlayerReport, ServerPresenceReportBody},
     support::{
         convert::trim_to_none,
+        steam::resolve_steam_identifiers_strict,
         time::{datetime_to_iso, now_utc, seconds_ago_from},
     },
 };
@@ -231,11 +232,49 @@ fn normalize_player_report(
     now: chrono::DateTime<chrono::Utc>,
     reported_at: &str,
 ) -> ServerPlayer {
-    let steam_id = player.steam_id.trim().to_string();
-    let steam_id64 = trim_to_none(player.steam_id64);
-    let steam_id3 = trim_to_none(player.steam_id3);
-    let fallback_id = if !steam_id.is_empty() {
-        steam_id.clone()
+    let raw_steam_id = player.steam_id.trim().to_string();
+    let raw_steam_id64 = trim_to_none(player.steam_id64);
+    let raw_steam_id3 = trim_to_none(player.steam_id3);
+    let resolved = raw_steam_id64
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .and_then(|value| resolve_steam_identifiers_strict(value).ok())
+        .or_else(|| {
+            raw_steam_id3
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .and_then(|value| resolve_steam_identifiers_strict(value).ok())
+        })
+        .or_else(|| {
+            if raw_steam_id.is_empty() {
+                None
+            } else {
+                resolve_steam_identifiers_strict(&raw_steam_id).ok()
+            }
+        });
+
+    let steam_id64 = resolved
+        .as_ref()
+        .map(|value| value.steam_id64.clone())
+        .or(raw_steam_id64);
+    let steam_id = resolved
+        .as_ref()
+        .map(|value| value.steam_id.clone())
+        .unwrap_or_else(|| {
+            if raw_steam_id.is_empty() {
+                "UNKNOWN".to_string()
+            } else {
+                raw_steam_id.clone()
+            }
+        });
+    let steam_id3 = resolved
+        .as_ref()
+        .map(|value| value.steam_id3.clone())
+        .or(raw_steam_id3);
+    let fallback_id = if let Some(steam_id64) = steam_id64.as_ref() {
+        steam_id64.clone()
+    } else if !raw_steam_id.is_empty() {
+        raw_steam_id.clone()
     } else {
         format!("userid-{}", player.user_id)
     };
@@ -248,11 +287,7 @@ fn normalize_player_report(
         } else {
             player.nickname.trim().to_string()
         },
-        steam_id: if steam_id.is_empty() {
-            "UNKNOWN".to_string()
-        } else {
-            steam_id
-        },
+        steam_id,
         steam_id64,
         steam_id3,
         ip_address: trim_to_none(player.ip_address).unwrap_or_else(|| "未知 IP".to_string()),

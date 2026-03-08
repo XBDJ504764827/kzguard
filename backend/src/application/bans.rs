@@ -69,7 +69,11 @@ pub(crate) async fn ban_server_player(
     let ban = create_ban_record(
         trim_to_none(Some(target.player.nickname.clone())),
         draft.ban_type.clone(),
-        target.player.steam_id.clone(),
+        target
+            .player
+            .steam_id64
+            .clone()
+            .unwrap_or_else(|| target.player.steam_id.clone()),
         draft
             .ip_address
             .or_else(|| Some(target.player.ip_address.clone())),

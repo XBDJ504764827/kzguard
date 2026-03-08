@@ -110,7 +110,7 @@ export const PublicWhitelistApplyPage = () => {
       }));
 
       try {
-        const history = await publicApi.getWhitelistHistory(profile.steamId);
+        const history = await publicApi.getWhitelistHistory(profile.steamId64);
         setHistoryInfo(history);
 
         if (history.duplicateBlocked) {

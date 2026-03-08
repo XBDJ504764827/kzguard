@@ -75,7 +75,9 @@ pub(crate) struct RconVerificationResult {
 pub(crate) struct WhitelistPlayer {
     pub(crate) id: String,
     pub(crate) nickname: String,
+    pub(crate) steam_id64: String,
     pub(crate) steam_id: String,
+    pub(crate) steam_id3: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) contact: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

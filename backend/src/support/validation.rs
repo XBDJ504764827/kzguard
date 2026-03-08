@@ -73,7 +73,7 @@ pub(crate) fn validate_server_fields(
 
 pub(crate) fn validate_application_draft(nickname: &str, steam_id: &str) -> AppResult<()> {
     require_non_empty(nickname, "请输入玩家昵称")?;
-    require_non_empty(steam_id, "请输入 Steam ID")?;
+    require_non_empty(steam_id, "请输入 Steam 标识")?;
     Ok(())
 }
 
@@ -169,4 +169,3 @@ pub(crate) fn validate_website_admin_create_draft(
 
     Ok(())
 }
-

@@ -133,7 +133,7 @@ export const PublicWhitelistNoticePage = () => {
                 白名单公示
               </Typography.Title>
               <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                公开展示已通过、待审核、已拒绝的白名单申请状态，方便玩家通过 SteamID 或游戏名称自助查询。
+                公开展示已通过、待审核、已拒绝的白名单申请状态，方便玩家通过 SteamID64、SteamID 或游戏名称自助查询。
               </Typography.Paragraph>
             </div>
             <Space wrap className="toolbar-action-group">
@@ -181,9 +181,9 @@ export const PublicWhitelistNoticePage = () => {
           <div className="page-toolbar">
             <div>
               <Typography.Title heading={5} style={{ marginBottom: 6 }}>
-                按 SteamID 或游戏名称搜索
+                按 SteamID64、SteamID 或游戏名称搜索
               </Typography.Title>
-              <Typography.Text type="secondary">已通过、待审核、已拒绝的白名单申请都会在这里公示，方便玩家快速查询。</Typography.Text>
+              <Typography.Text type="secondary">已通过、待审核、已拒绝的白名单申请都会在这里公示，方便玩家用 SteamID64、SteamID 或游戏名称快速查询。</Typography.Text>
             </div>
             <div className="toolbar-search-group">
               <Input
@@ -191,7 +191,7 @@ export const PublicWhitelistNoticePage = () => {
                 allowClear
                 size="large"
                 value={keyword}
-                placeholder="输入 SteamID 或游戏名称"
+                placeholder="输入 SteamID64、SteamID 或游戏名称"
                 onChange={setKeyword}
                 onPressEnter={() => updateQuery(status, keyword)}
               />
@@ -233,7 +233,9 @@ export const PublicWhitelistNoticePage = () => {
             >
               <div className="detail-grid">
                 {renderDetailItem('游戏名称', record.nickname)}
+                {renderDetailItem('SteamID64', record.steamId64)}
                 {renderDetailItem('SteamID', record.steamId)}
+                {renderDetailItem('SteamID3', record.steamId3)}
                 {renderDetailItem('申请时间', formatTime(record.appliedAt))}
                 {renderDetailItem('审核时间', formatTime(record.reviewedAt))}
                 {renderDetailItem('当前状态', statusTextMap[record.status])}

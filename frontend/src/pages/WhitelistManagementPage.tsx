@@ -68,7 +68,7 @@ const validatePlayerDraft = (nickname: string, steamId: string) => {
   }
 
   if (!steamId.trim()) {
-    return '请输入 Steam ID';
+    return '请输入 Steam 标识';
   }
 
   return null;
@@ -100,7 +100,9 @@ export const WhitelistManagementPage = () => {
       render: (_value: string, record: WhitelistPlayer) => (
         <Space direction="vertical" size="mini">
           <Typography.Text style={{ fontWeight: 600 }}>{record.nickname}</Typography.Text>
-          <Typography.Text type="secondary">{record.steamId}</Typography.Text>
+          <Typography.Text type="secondary">SteamID64：{record.steamId64 || '-'}</Typography.Text>
+          <Typography.Text type="secondary">SteamID：{record.steamId}</Typography.Text>
+          <Typography.Text type="secondary">SteamID3：{record.steamId3 || '-'}</Typography.Text>
         </Space>
       ),
     },
@@ -290,12 +292,12 @@ export const WhitelistManagementPage = () => {
             placeholder="例如：SkyWalker"
           />
 
-          <Typography.Text>Steam ID</Typography.Text>
+          <Typography.Text>Steam 标识</Typography.Text>
           <Input
             allowClear
             value={manualDraft.steamId}
             onChange={(value) => setManualDraft((draft) => ({ ...draft, steamId: value }))}
-            placeholder="例如：STEAM_1:0:123456"
+            placeholder="例如：76561197960512640 / STEAM_1:0:123456 / [U:1:246912]"
           />
 
           <Typography.Text>联系方式</Typography.Text>
@@ -343,12 +345,12 @@ export const WhitelistManagementPage = () => {
             placeholder="例如：NewChallenger"
           />
 
-          <Typography.Text>Steam ID</Typography.Text>
+          <Typography.Text>Steam 标识</Typography.Text>
           <Input
             allowClear
             value={applicationDraft.steamId}
             onChange={(value) => setApplicationDraft((draft) => ({ ...draft, steamId: value }))}
-            placeholder="例如：STEAM_1:1:998877"
+            placeholder="例如：76561197962263483 / STEAM_1:1:998877 / [U:1:1997755]"
           />
 
           <Typography.Text>联系方式</Typography.Text>

@@ -76,11 +76,14 @@ pub(crate) async fn create_application(
     draft: ApplicationDraft,
 ) -> AppResult<WhitelistPlayer> {
     validate_application_draft(&draft.nickname, &draft.steam_id)?;
+    let identifiers = resolve_history_identifiers(&draft.steam_id).await?;
 
     let player = WhitelistPlayer {
         id: prefixed_id("player"),
         nickname: draft.nickname.trim().to_string(),
-        steam_id: draft.steam_id.trim().to_string(),
+        steam_id64: identifiers.steam_id64,
+        steam_id: identifiers.steam_id,
+        steam_id3: identifiers.steam_id3,
         contact: trim_to_none(draft.contact),
         note: trim_to_none(draft.note),
         status: "pending".to_string(),
@@ -129,7 +132,9 @@ pub(crate) async fn create_public_application(
     let player = WhitelistPlayer {
         id: prefixed_id("player"),
         nickname,
+        steam_id64: resolved_profile.steam_id64,
         steam_id: resolved_profile.steam_id,
+        steam_id3: resolved_profile.steam_id3,
         contact: trim_to_none(draft.contact),
         note: trim_to_none(draft.note),
         status: "pending".to_string(),
@@ -149,12 +154,15 @@ pub(crate) async fn create_manual_whitelist_entry(
     operator_id: Option<String>,
 ) -> AppResult<WhitelistPlayer> {
     validate_manual_whitelist_draft(&draft.nickname, &draft.steam_id, &draft.status)?;
+    let identifiers = resolve_history_identifiers(&draft.steam_id).await?;
 
     let now = now_iso();
     let player = WhitelistPlayer {
         id: prefixed_id("player"),
         nickname: draft.nickname.trim().to_string(),
-        steam_id: draft.steam_id.trim().to_string(),
+        steam_id64: identifiers.steam_id64,
+        steam_id: identifiers.steam_id,
+        steam_id3: identifiers.steam_id3,
         contact: trim_to_none(draft.contact),
         note: trim_to_none(draft.note),
         status: draft.status,
@@ -268,13 +276,15 @@ async fn insert_whitelist_player(pool: &MySqlPool, player: &WhitelistPlayer) -> 
     sqlx::query(
         r#"
         INSERT INTO whitelist_players (
-          id, nickname, steam_id, contact, note, status, source, applied_at, reviewed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          id, nickname, steam_id64, steam_id, steam_id3, contact, note, status, source, applied_at, reviewed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&player.id)
     .bind(&player.nickname)
+    .bind(&player.steam_id64)
     .bind(&player.steam_id)
+    .bind(&player.steam_id3)
     .bind(&player.contact)
     .bind(&player.note)
     .bind(&player.status)
@@ -342,20 +352,19 @@ fn matches_whitelist_search(player: &WhitelistPlayer, search: Option<&str>) -> b
 
     let normalized_search = search.to_lowercase();
     if player.nickname.to_lowercase().contains(&normalized_search)
+        || player.steam_id64.to_lowercase().contains(&normalized_search)
         || player.steam_id.to_lowercase().contains(&normalized_search)
+        || player.steam_id3.to_lowercase().contains(&normalized_search)
     {
         return true;
     }
 
     if let Ok(search_identifiers) = resolve_steam_identifiers_strict(search) {
-        if player.steam_id.eq_ignore_ascii_case(&search_identifiers.steam_id) {
+        if player.steam_id64 == search_identifiers.steam_id64
+            || player.steam_id.eq_ignore_ascii_case(&search_identifiers.steam_id)
+            || player.steam_id3.eq_ignore_ascii_case(&search_identifiers.steam_id3)
+        {
             return true;
-        }
-
-        if let Ok(player_identifiers) = resolve_steam_identifiers_strict(&player.steam_id) {
-            return player_identifiers.steam_id64 == search_identifiers.steam_id64
-                || player_identifiers.steam_id == search_identifiers.steam_id
-                || player_identifiers.steam_id3 == search_identifiers.steam_id3;
         }
     }
 
@@ -366,14 +375,11 @@ fn matches_whitelist_identity_exact(
     player: &WhitelistPlayer,
     identifiers: &ResolvedSteamIdentifiers,
 ) -> bool {
-    if player.steam_id.eq_ignore_ascii_case(&identifiers.steam_id) {
+    if player.steam_id64 == identifiers.steam_id64
+        || player.steam_id.eq_ignore_ascii_case(&identifiers.steam_id)
+        || player.steam_id3.eq_ignore_ascii_case(&identifiers.steam_id3)
+    {
         return true;
-    }
-
-    if let Ok(player_identifiers) = resolve_steam_identifiers_strict(&player.steam_id) {
-        return player_identifiers.steam_id64 == identifiers.steam_id64
-            || player_identifiers.steam_id == identifiers.steam_id
-            || player_identifiers.steam_id3 == identifiers.steam_id3;
     }
 
     false

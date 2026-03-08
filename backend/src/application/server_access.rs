@@ -574,6 +574,13 @@ async fn load_approved_whitelist_map(pool: &MySqlPool) -> AppResult<HashMap<Stri
 
     let mut whitelist = HashMap::new();
     for row in rows {
+        if !row.steam_id64.trim().is_empty() {
+            whitelist
+                .entry(row.steam_id64.clone())
+                .or_insert(row.nickname.clone());
+            continue;
+        }
+
         match resolve_steam_identifiers_strict(&row.steam_id) {
             Ok(identifiers) => {
                 whitelist

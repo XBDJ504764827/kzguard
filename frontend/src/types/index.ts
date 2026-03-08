@@ -64,7 +64,9 @@ export type WhitelistSource = 'application' | 'manual';
 export interface WhitelistPlayer {
   id: string;
   nickname: string;
+  steamId64: string;
   steamId: string;
+  steamId3: string;
   contact?: string;
   note?: string;
   status: WhitelistStatus;

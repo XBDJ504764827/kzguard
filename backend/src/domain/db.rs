@@ -43,7 +43,9 @@ pub(crate) struct DbLiveServerTarget {
 pub(crate) struct DbWhitelistPlayer {
     pub(crate) id: String,
     pub(crate) nickname: String,
+    pub(crate) steam_id64: String,
     pub(crate) steam_id: String,
+    pub(crate) steam_id3: String,
     pub(crate) contact: Option<String>,
     pub(crate) note: Option<String>,
     pub(crate) status: String,

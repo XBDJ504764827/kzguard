@@ -3,7 +3,12 @@ use crate::{
     domain::models::BanRecord,
     error::AppResult,
     infra::seed::seed_data,
-    support::{convert::bool_to_i32, ids::generate_plugin_token, time::iso_to_mysql},
+    support::{
+        convert::bool_to_i32,
+        ids::generate_plugin_token,
+        steam::resolve_steam_identifiers_strict,
+        time::iso_to_mysql,
+    },
 };
 use sqlx::{
     Connection, Executor, MySqlConnection, MySqlPool,
@@ -75,6 +80,50 @@ async fn ensure_ban_records_column(pool: &MySqlPool, column_name: &str, column_d
     if exists == 0 {
         let sql = format!("ALTER TABLE ban_records ADD COLUMN {} {}", column_name, column_ddl);
         sqlx::query(&sql).execute(pool).await?;
+    }
+
+    Ok(())
+}
+
+async fn ensure_whitelist_players_column(pool: &MySqlPool, column_name: &str, column_ddl: &str) -> AppResult<()> {
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'whitelist_players' AND COLUMN_NAME = ?",
+    )
+    .bind(column_name)
+    .fetch_one(pool)
+    .await?;
+
+    if exists == 0 {
+        let sql = format!("ALTER TABLE whitelist_players ADD COLUMN {} {}", column_name, column_ddl);
+        sqlx::query(&sql).execute(pool).await?;
+    }
+
+    Ok(())
+}
+
+async fn ensure_whitelist_player_identifiers(pool: &MySqlPool) -> AppResult<()> {
+    let rows = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT id, steam_id, steam_id64, steam_id3 FROM whitelist_players",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for (player_id, steam_id, steam_id64, steam_id3) in rows {
+        if !steam_id64.trim().is_empty() && !steam_id3.trim().is_empty() {
+            continue;
+        }
+
+        let Ok(identifiers) = resolve_steam_identifiers_strict(&steam_id) else {
+            continue;
+        };
+
+        sqlx::query("UPDATE whitelist_players SET steam_id64 = ?, steam_id = ?, steam_id3 = ? WHERE id = ?")
+            .bind(&identifiers.steam_id64)
+            .bind(&identifiers.steam_id)
+            .bind(&identifiers.steam_id3)
+            .bind(&player_id)
+            .execute(pool)
+            .await?;
     }
 
     Ok(())
@@ -161,7 +210,9 @@ pub(crate) async fn create_tables(pool: &MySqlPool) -> AppResult<()> {
         CREATE TABLE IF NOT EXISTS whitelist_players (
           id VARCHAR(64) PRIMARY KEY,
           nickname VARCHAR(255) NOT NULL,
+          steam_id64 VARCHAR(32) NOT NULL DEFAULT '',
           steam_id VARCHAR(255) NOT NULL,
+          steam_id3 VARCHAR(255) NOT NULL DEFAULT '',
           contact VARCHAR(255) NULL,
           note TEXT NULL,
           status VARCHAR(32) NOT NULL,
@@ -173,6 +224,10 @@ pub(crate) async fn create_tables(pool: &MySqlPool) -> AppResult<()> {
         "#,
     )
     .await?;
+
+    ensure_whitelist_players_column(pool, "steam_id64", "VARCHAR(32) NOT NULL DEFAULT '' AFTER nickname").await?;
+    ensure_whitelist_players_column(pool, "steam_id3", "VARCHAR(255) NOT NULL DEFAULT '' AFTER steam_id").await?;
+    ensure_whitelist_player_identifiers(pool).await?;
 
     pool.execute(
         r#"
@@ -333,13 +388,15 @@ pub(crate) async fn seed_if_empty(pool: &MySqlPool) -> AppResult<()> {
         sqlx::query(
             r#"
             INSERT INTO whitelist_players (
-              id, nickname, steam_id, contact, note, status, source, applied_at, reviewed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              id, nickname, steam_id64, steam_id, steam_id3, contact, note, status, source, applied_at, reviewed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&player.id)
         .bind(&player.nickname)
+        .bind(&player.steam_id64)
         .bind(&player.steam_id)
+        .bind(&player.steam_id3)
         .bind(&player.contact)
         .bind(&player.note)
         .bind(&player.status)
