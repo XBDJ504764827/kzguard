@@ -8,6 +8,7 @@ export const operationLogActionLabelMap: Record<OperationLogAction, string> = {
   server_updated: '更新服务器设置',
   server_deleted: '删除服务器',
   server_plugin_token_reset: '重置插件 Token',
+  server_restarted: '重启游戏服务器',
   server_player_kicked: '踢出服务器玩家',
   server_player_banned: '封禁服务器玩家',
   ban_record_manual_created: '手动添加封禁记录',

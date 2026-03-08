@@ -79,6 +79,7 @@ const createEmptyServerDraft = (): ServerDraft => ({
   ip: '',
   port: 27015,
   rconPassword: '',
+  restartCommand: '',
   whitelistEnabled: false,
   entryVerificationEnabled: false,
   minEntryRating: 0,
@@ -89,6 +90,7 @@ const createEmptyServerSettingsDraft = (): ServerSettingsDraft => ({
   ip: '',
   port: 27015,
   rconPassword: '',
+  restartCommand: '',
   whitelistEnabled: false,
   entryVerificationEnabled: false,
   minEntryRating: 0,
@@ -99,6 +101,7 @@ const createServerSettingsDraft = (server: Server): ServerSettingsDraft => ({
   ip: server.ip,
   port: server.port,
   rconPassword: server.rconPassword,
+  restartCommand: server.restartCommand ?? '',
   whitelistEnabled: server.whitelistEnabled ?? false,
   entryVerificationEnabled: server.entryVerificationEnabled ?? false,
   minEntryRating: server.minEntryRating ?? 0,
@@ -181,6 +184,7 @@ export const CommunityManagementPage = () => {
     addServer,
     updateServer,
     resetServerPluginToken,
+    restartServer,
     deleteServer,
     loadServerPlayers,
     kickServerPlayer,
@@ -188,6 +192,7 @@ export const CommunityManagementPage = () => {
     apiMode,
     apiError,
     bootstrapping,
+    currentAdmin,
   } = useAppStore();
   const [communityModalVisible, setCommunityModalVisible] = useState(false);
   const [communityEditModalVisible, setCommunityEditModalVisible] = useState(false);
@@ -214,9 +219,12 @@ export const CommunityManagementPage = () => {
   const [submittingServerSettings, setSubmittingServerSettings] = useState(false);
   const [submittingPlayerAction, setSubmittingPlayerAction] = useState(false);
   const [resettingPluginTokenServerId, setResettingPluginTokenServerId] = useState<string | null>(null);
+  const [restartingServerId, setRestartingServerId] = useState<string | null>(null);
   const [loadingPlayerDrawer, setLoadingPlayerDrawer] = useState(false);
   const [verifyingServer, setVerifyingServer] = useState(false);
   const [serverVerification, setServerVerification] = useState<ServerVerificationState | null>(null);
+
+  const isSystemAdmin = currentAdmin?.role === 'system_admin';
 
   const totalServerCount = useMemo(
     () => state.communities.reduce((count, community) => count + community.servers.length, 0),
@@ -676,6 +684,33 @@ export const CommunityManagementPage = () => {
     });
   };
 
+  const handleRestartServer = (community: Community, server: Server) => {
+    if (!server.restartConfigured) {
+      Message.warning('当前服务器尚未配置宿主机重启命令，请先进入“服务器设置”填写 restart command');
+      return;
+    }
+
+    Modal.confirm({
+      title: '重启游戏服务器',
+      content: `确认执行服务器“${server.name}”已配置的宿主机重启命令吗？执行后当前对局和在线连接会短暂中断。`,
+      okText: '确认重启',
+      cancelText: '取消',
+      okButtonProps: { status: 'warning' },
+      onOk: async () => {
+        try {
+          setRestartingServerId(server.id);
+          await restartServer(community.id, server.id);
+          Message.success(`已向服务器 ${server.name} 发送重启指令`);
+        } catch (error) {
+          Message.error(getErrorMessage(error, '服务器重启失败'));
+          throw error;
+        } finally {
+          setRestartingServerId((currentValue) => (currentValue === server.id ? null : currentValue));
+        }
+      },
+    });
+  };
+
   const renderServerList = (community: Community, servers: Server[]) => (
     <Space direction="vertical" size="medium" style={{ width: '100%' }} className="community-server-list">
       {servers.map((server) => (
@@ -694,6 +729,11 @@ export const CommunityManagementPage = () => {
                 <Tag color={server.entryVerificationEnabled ? 'arcoblue' : 'gray'}>
                   进服验证{server.entryVerificationEnabled ? '开启' : '关闭'}
                 </Tag>
+                {isSystemAdmin ? (
+                  <Tag color={server.restartConfigured ? 'green' : 'gray'}>
+                    网页重启{server.restartConfigured ? '已配置' : '未配置'}
+                  </Tag>
+                ) : null}
                 {server.entryVerificationEnabled ? (
                   <>
                     <Tag color="purple">Rating ≥ {server.minEntryRating}</Tag>
@@ -727,6 +767,18 @@ export const CommunityManagementPage = () => {
               <Button size="small" type="outline" onClick={() => { void openPlayerDrawer(community.id, server.id); }}>
                 玩家管理
               </Button>
+              {isSystemAdmin ? (
+                <Button
+                  size="small"
+                  type="outline"
+                  status="warning"
+                  loading={restartingServerId === server.id}
+                  disabled={!server.restartConfigured}
+                  onClick={() => handleRestartServer(community, server)}
+                >
+                  重启服务器
+                </Button>
+              ) : null}
               <Button
                 size="small"
                 type="outline"
@@ -753,7 +805,7 @@ export const CommunityManagementPage = () => {
                 社区组管理
               </Typography.Title>
               <Typography.Paragraph className="page-toolbar-description" type="secondary">
-                网站管理员可按服务器单独维护连接参数、白名单与进服验证开关，并直接对在线玩家执行封禁或踢出操作。
+                网站管理员可按服务器单独维护连接参数、白名单与进服验证开关，并直接对在线玩家执行封禁或踢出操作；系统管理员在配置宿主机重启命令后可额外执行游戏服务器重启。
               </Typography.Paragraph>
             </div>
 
@@ -966,6 +1018,21 @@ export const CommunityManagementPage = () => {
             />
           </Space>
 
+          {isSystemAdmin ? (
+            <Space direction="vertical" size="small" style={{ width: '100%' }}>
+              <Typography.Text>宿主机重启命令（可选）</Typography.Text>
+              <Input.TextArea
+                placeholder="例如：systemctl restart csgo-server-1 或 docker restart kz-server-1"
+                value={serverDraft.restartCommand}
+                onChange={(value) => setServerDraft((draft) => ({ ...draft, restartCommand: value }))}
+                autoSize={{ minRows: 2, maxRows: 4 }}
+              />
+              <Typography.Text type="secondary">
+                不再使用 RCON `_restart`。若需要网页重启，必须填写一个能够真正拉起游戏服进程的宿主机命令。
+              </Typography.Text>
+            </Space>
+          ) : null}
+
           <div className="server-setting-row">
             <Space direction="vertical" size="small" style={{ width: '100%' }}>
               <Typography.Text style={{ fontWeight: 600 }}>RCON 校验</Typography.Text>
@@ -1055,7 +1122,7 @@ export const CommunityManagementPage = () => {
         }}
       >
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
-          <Alert type="info" showIcon content="可单独修改服务器 IP、端口、RCON 密码，以及白名单、进服验证和进服验证门槛。" />
+          <Alert type="info" showIcon content="可单独修改服务器 IP、端口、RCON 密码，以及白名单、进服验证和进服验证门槛；系统管理员还可配置宿主机重启命令。" />
 
           {serverSettingsContext ? (
             <Space size="small" wrap>
@@ -1144,6 +1211,21 @@ export const CommunityManagementPage = () => {
               onChange={(value) => setServerSettingsDraft((draft) => ({ ...draft, rconPassword: value }))}
             />
           </Space>
+
+          {isSystemAdmin ? (
+            <Space direction="vertical" size="small" style={{ width: '100%' }}>
+              <Typography.Text>宿主机重启命令（可选）</Typography.Text>
+              <Input.TextArea
+                placeholder="例如：systemctl restart csgo-server-1 或 docker restart kz-server-1"
+                value={serverSettingsDraft.restartCommand}
+                onChange={(value) => setServerSettingsDraft((draft) => ({ ...draft, restartCommand: value }))}
+                autoSize={{ minRows: 2, maxRows: 4 }}
+              />
+              <Typography.Text type="secondary">
+                这里填写能真正重启并重新拉起游戏服进程的宿主机命令；留空则网页“重启服务器”按钮会禁用。
+              </Typography.Text>
+            </Space>
+          ) : null}
 
           <Divider style={{ margin: 0 }} />
 

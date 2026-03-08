@@ -72,6 +72,10 @@ pub(crate) fn build_router(state: SharedState) -> Router {
             post(reset_server_plugin_token_handler),
         )
         .route(
+            "/api/communities/{community_id}/servers/{server_id}/restart",
+            post(restart_server_handler),
+        )
+        .route(
             "/api/communities/{community_id}/servers/{server_id}/players",
             get(list_server_players_handler),
         )

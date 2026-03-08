@@ -66,6 +66,7 @@ interface AppStoreContextValue {
   addServer: (communityId: string, draft: ServerDraft) => Promise<Server>;
   updateServer: (communityId: string, serverId: string, draft: ServerSettingsDraft) => Promise<Server>;
   resetServerPluginToken: (communityId: string, serverId: string) => Promise<Server>;
+  restartServer: (communityId: string, serverId: string) => Promise<void>;
   deleteServer: (communityId: string, serverId: string) => Promise<void>;
   loadServerPlayers: (communityId: string, serverId: string) => Promise<ServerPlayersSnapshot>;
   kickServerPlayer: (communityId: string, serverId: string, playerId: string, reason: string) => Promise<void>;
@@ -98,6 +99,8 @@ const normalizeServer = (server: Server, fallback?: Partial<Server>): Server => 
   minSteamLevel: server.minSteamLevel ?? fallback?.minSteamLevel ?? 0,
   playerReportedAt: server.playerReportedAt ?? fallback?.playerReportedAt,
   pluginToken: server.pluginToken ?? fallback?.pluginToken ?? '',
+  restartConfigured: server.restartConfigured ?? fallback?.restartConfigured ?? false,
+  restartCommand: server.restartCommand ?? fallback?.restartCommand,
   onlinePlayers: Array.isArray(server.onlinePlayers) ? server.onlinePlayers : fallback?.onlinePlayers ?? [],
 });
 const getBanOperatorSnapshot = (admin: WebsiteAdmin | null): BanRecordOperator => {
@@ -400,12 +403,17 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
   };
 
   const addServer = async (communityId: string, draft: ServerDraft) => {
-    const createdServer = await apiService.createServer(communityId, draft);
+    const createdServer = await apiService.createServer(communityId, {
+      ...draft,
+      restartCommand: currentAdmin?.role === 'system_admin' ? normalizeText(draft.restartCommand) : undefined,
+    });
     const server = normalizeServer(createdServer, {
       whitelistEnabled: draft.whitelistEnabled,
       entryVerificationEnabled: draft.entryVerificationEnabled,
       minEntryRating: draft.minEntryRating,
       minSteamLevel: draft.minSteamLevel,
+      restartConfigured: Boolean(normalizeText(draft.restartCommand)),
+      restartCommand: currentAdmin?.role === 'system_admin' ? normalizeText(draft.restartCommand) : undefined,
       onlinePlayers: [],
     });
     const community = state.communities.find((item) => item.id === communityId);
@@ -436,13 +444,22 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
   const updateServer = async (communityId: string, serverId: string, draft: ServerSettingsDraft) => {
     const community = state.communities.find((item) => item.id === communityId);
     const currentServer = community?.servers.find((item) => item.id === serverId);
-    const updatedServer = await apiService.updateServer(communityId, serverId, draft);
+    const updatedServer = await apiService.updateServer(communityId, serverId, {
+      ...draft,
+      restartCommand: currentAdmin?.role === 'system_admin' ? normalizeText(draft.restartCommand) : undefined,
+    });
     const server = normalizeServer(updatedServer, {
       ...currentServer,
       whitelistEnabled: draft.whitelistEnabled,
       entryVerificationEnabled: draft.entryVerificationEnabled,
       minEntryRating: draft.minEntryRating,
       minSteamLevel: draft.minSteamLevel,
+      restartConfigured: currentAdmin?.role === 'system_admin'
+        ? Boolean(normalizeText(draft.restartCommand))
+        : currentServer?.restartConfigured,
+      restartCommand: currentAdmin?.role === 'system_admin'
+        ? normalizeText(draft.restartCommand)
+        : currentServer?.restartCommand,
     });
 
     setState((currentState) => ({
@@ -500,6 +517,23 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     );
 
     return server;
+  };
+
+  const restartServer = async (communityId: string, serverId: string) => {
+    const community = state.communities.find((item) => item.id === communityId);
+    const server = community?.servers.find((item) => item.id === serverId);
+
+    if (!community || !server) {
+      throw new Error('未找到要重启的服务器');
+    }
+
+    await apiService.restartServer(communityId, serverId);
+    setApiError(null);
+
+    appendOperationLog(
+      'server_restarted',
+      `重启了社区 “${community.name}” 下的服务器 ${server.name}（${server.ip}:${server.port}）。`,
+    );
   };
 
   const deleteServer = async (communityId: string, serverId: string) => {
@@ -868,6 +902,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       addServer,
       updateServer,
       resetServerPluginToken,
+      restartServer,
       deleteServer,
       loadServerPlayers,
       kickServerPlayer,

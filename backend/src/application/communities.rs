@@ -6,8 +6,9 @@ use crate::{
     error::{AppError, AppResult},
     http::requests::{ServerDraft, ServerSettingsDraft},
     support::{
-        convert::bool_to_i32,
+        convert::{bool_to_i32, trim_to_none},
         ids::{generate_plugin_token, prefixed_id},
+        process::execute_host_command,
         rcon::{execute_rcon_command, verify_rcon_connection},
         time::{iso_to_mysql, naive_to_iso, now_iso},
         validation::{require_non_empty, validate_server_fields},
@@ -32,8 +33,9 @@ async fn load_community_by_id(
     pool: &MySqlPool,
     redis: &RedisClient,
     community_id: &str,
+    include_restart_command: bool,
 ) -> AppResult<Community> {
-    list_communities(pool, redis)
+    list_communities(pool, redis, include_restart_command)
         .await?
         .into_iter()
         .find(|community| community.id == community_id)
@@ -66,6 +68,7 @@ async fn verify_server_settings_connection(
         ip: draft.ip.clone(),
         port: draft.port,
         rcon_password: draft.rcon_password.clone(),
+        restart_command: None,
         whitelist_enabled: draft.whitelist_enabled,
         entry_verification_enabled: draft.entry_verification_enabled,
         min_entry_rating: draft.min_entry_rating,
@@ -78,6 +81,7 @@ async fn verify_server_settings_connection(
 pub(crate) async fn list_communities(
     pool: &MySqlPool,
     redis: &RedisClient,
+    include_restart_command: bool,
 ) -> AppResult<Vec<Community>> {
     let community_rows =
         sqlx::query_as::<_, DbCommunity>("SELECT * FROM communities ORDER BY created_at DESC")
@@ -115,6 +119,8 @@ pub(crate) async fn list_communities(
                 rcon_password: server.rcon_password,
                 plugin_token: server.plugin_token,
                 rcon_verified_at: naive_to_iso(server.rcon_verified_at),
+                restart_configured: server.restart_command.as_ref().is_some_and(|value| !value.trim().is_empty()),
+                restart_command: if include_restart_command { server.restart_command } else { None },
                 whitelist_enabled: server.whitelist_enabled != 0,
                 entry_verification_enabled: server.entry_verification_enabled != 0,
                 min_entry_rating: server.min_entry_rating,
@@ -174,6 +180,7 @@ pub(crate) async fn update_community(
     community_id: &str,
     name: String,
     operator_id: Option<String>,
+    include_restart_command: bool,
 ) -> AppResult<Community> {
     require_non_empty(&name, "请输入社区名称")?;
 
@@ -186,7 +193,7 @@ pub(crate) async fn update_community(
     let next_name = name.trim().to_string();
 
     if existing.name == next_name {
-        return load_community_by_id(pool, redis, community_id).await;
+        return load_community_by_id(pool, redis, community_id, include_restart_command).await;
     }
 
     sqlx::query("UPDATE communities SET name = ? WHERE id = ?")
@@ -204,7 +211,7 @@ pub(crate) async fn update_community(
     )
     .await?;
 
-    load_community_by_id(pool, redis, community_id).await
+    load_community_by_id(pool, redis, community_id, include_restart_command).await
 }
 
 pub(crate) async fn delete_community(
@@ -258,6 +265,8 @@ pub(crate) async fn create_server(
     )?;
 
     let community = require_community_name(pool, community_id).await?;
+    let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
+    let restart_command = normalize_restart_command_for_create(&operator, draft.restart_command.clone())?;
     let verified_at = verify_server_draft_connection(&draft).await?;
 
     let server = Server {
@@ -268,6 +277,12 @@ pub(crate) async fn create_server(
         rcon_password: draft.rcon_password,
         plugin_token: generate_plugin_token(),
         rcon_verified_at: verified_at.clone(),
+        restart_configured: restart_command.is_some(),
+        restart_command: if operator.role == "system_admin" {
+            restart_command.clone()
+        } else {
+            None
+        },
         whitelist_enabled: draft.whitelist_enabled,
         entry_verification_enabled: draft.entry_verification_enabled,
         min_entry_rating: draft.min_entry_rating,
@@ -279,8 +294,8 @@ pub(crate) async fn create_server(
     sqlx::query(
         r#"
         INSERT INTO servers (
-          id, community_id, name, ip, port, rcon_password, plugin_token, rcon_verified_at, whitelist_enabled, entry_verification_enabled, min_entry_rating, min_steam_level
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          id, community_id, name, ip, port, rcon_password, restart_command, plugin_token, rcon_verified_at, whitelist_enabled, entry_verification_enabled, min_entry_rating, min_steam_level
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&server.id)
@@ -289,6 +304,7 @@ pub(crate) async fn create_server(
     .bind(&server.ip)
     .bind(server.port)
     .bind(&server.rcon_password)
+    .bind(&restart_command)
     .bind(&server.plugin_token)
     .bind(iso_to_mysql(&server.rcon_verified_at))
     .bind(bool_to_i32(server.whitelist_enabled))
@@ -298,7 +314,6 @@ pub(crate) async fn create_server(
     .execute(pool)
     .await?;
 
-    let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
     append_operation_log(
         pool,
         "server_created",
@@ -355,18 +370,25 @@ pub(crate) async fn update_server_settings(
 
     let existing_server =
         existing_server.ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到目标服务器"))?;
+    let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
+    let next_restart_command = normalize_restart_command_for_update(
+        &operator,
+        existing_server.restart_command.clone(),
+        draft.restart_command.clone(),
+    )?;
     let verified_at = verify_server_settings_connection(&existing_server.name, &draft).await?;
 
     sqlx::query(
         r#"
         UPDATE servers
-           SET ip = ?, port = ?, rcon_password = ?, rcon_verified_at = ?, whitelist_enabled = ?, entry_verification_enabled = ?, min_entry_rating = ?, min_steam_level = ?
+           SET ip = ?, port = ?, rcon_password = ?, restart_command = ?, rcon_verified_at = ?, whitelist_enabled = ?, entry_verification_enabled = ?, min_entry_rating = ?, min_steam_level = ?
          WHERE id = ? AND community_id = ?
         "#,
     )
     .bind(draft.ip.trim())
     .bind(draft.port)
     .bind(&draft.rcon_password)
+    .bind(&next_restart_command)
     .bind(iso_to_mysql(&verified_at))
     .bind(bool_to_i32(draft.whitelist_enabled))
     .bind(bool_to_i32(draft.entry_verification_enabled))
@@ -389,6 +411,12 @@ pub(crate) async fn update_server_settings(
         rcon_password: draft.rcon_password,
         plugin_token: existing_server.plugin_token,
         rcon_verified_at: verified_at,
+        restart_configured: next_restart_command.is_some(),
+        restart_command: if operator.role == "system_admin" {
+            next_restart_command.clone()
+        } else {
+            None
+        },
         whitelist_enabled: draft.whitelist_enabled,
         entry_verification_enabled: draft.entry_verification_enabled,
         min_entry_rating: draft.min_entry_rating,
@@ -456,6 +484,7 @@ pub(crate) async fn reset_server_plugin_token(
     let existing_server =
         existing_server.ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到目标服务器"))?;
     let community = require_community_name(pool, community_id).await?;
+    let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
     let next_plugin_token = generate_plugin_token();
 
     sqlx::query(
@@ -480,6 +509,12 @@ pub(crate) async fn reset_server_plugin_token(
         rcon_password: existing_server.rcon_password,
         plugin_token: next_plugin_token,
         rcon_verified_at: naive_to_iso(existing_server.rcon_verified_at),
+        restart_configured: existing_server.restart_command.is_some(),
+        restart_command: if operator.role == "system_admin" {
+            existing_server.restart_command.clone()
+        } else {
+            None
+        },
         whitelist_enabled: existing_server.whitelist_enabled != 0,
         entry_verification_enabled: existing_server.entry_verification_enabled != 0,
         min_entry_rating: existing_server.min_entry_rating,
@@ -501,6 +536,56 @@ pub(crate) async fn reset_server_plugin_token(
     .await?;
 
     Ok(server)
+}
+
+pub(crate) async fn restart_server(
+    pool: &MySqlPool,
+    community_id: &str,
+    server_id: &str,
+    operator_id: Option<String>,
+) -> AppResult<()> {
+    let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
+    ensure_system_admin(&operator, "仅系统管理员可以重启游戏服务器")?;
+
+    let server = sqlx::query_as::<_, DbServerRestartTarget>(
+        r#"
+        SELECT s.name, c.name AS community_name, s.ip, s.port, s.restart_command
+          FROM servers s
+          INNER JOIN communities c ON c.id = s.community_id
+         WHERE s.id = ? AND s.community_id = ?
+        "#,
+    )
+    .bind(server_id)
+    .bind(community_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let server =
+        server.ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到目标服务器"))?;
+
+    let restart_command = trim_to_none(server.restart_command.clone()).ok_or_else(|| {
+        AppError::http(
+            StatusCode::BAD_REQUEST,
+            "当前服务器尚未配置宿主机重启命令。为避免再次出现只关服不拉起的问题，系统已禁用 RCON `_restart` 方式；请先在“服务器设置”中填写 restart command。",
+        )
+    })?;
+
+    execute_host_command(&restart_command)
+        .await
+        .map_err(|message| AppError::http(StatusCode::BAD_REQUEST, message))?;
+
+    append_operation_log(
+        pool,
+        "server_restarted",
+        format!(
+            "重启了社区 “{}” 下的服务器 {}（{}:{}）。",
+            server.community_name, server.name, server.ip, server.port
+        ),
+        &operator,
+    )
+    .await?;
+
+    Ok(())
 }
 
 pub(crate) async fn delete_server(
@@ -593,6 +678,51 @@ pub(crate) async fn kick_server_player(
         &operator,
     )
     .await?;
+
+    Ok(())
+}
+
+fn normalize_restart_command_for_create(
+    operator: &OperatorSnapshot,
+    restart_command: Option<String>,
+) -> AppResult<Option<String>> {
+    let normalized = trim_to_none(restart_command);
+
+    if normalized.is_some() && operator.role != "system_admin" {
+        return Err(AppError::http(
+            StatusCode::FORBIDDEN,
+            "仅系统管理员可以配置服务器重启命令",
+        ));
+    }
+
+    Ok(normalized)
+}
+
+fn normalize_restart_command_for_update(
+    operator: &OperatorSnapshot,
+    existing_restart_command: Option<String>,
+    next_restart_command: Option<String>,
+) -> AppResult<Option<String>> {
+    let normalized = trim_to_none(next_restart_command);
+
+    if operator.role == "system_admin" {
+        return Ok(normalized);
+    }
+
+    if normalized.is_some() {
+        return Err(AppError::http(
+            StatusCode::FORBIDDEN,
+            "仅系统管理员可以配置服务器重启命令",
+        ));
+    }
+
+    Ok(existing_restart_command)
+}
+
+fn ensure_system_admin(operator: &OperatorSnapshot, message: &str) -> AppResult<()> {
+    if operator.role != "system_admin" {
+        return Err(AppError::http(StatusCode::FORBIDDEN, message));
+    }
 
     Ok(())
 }

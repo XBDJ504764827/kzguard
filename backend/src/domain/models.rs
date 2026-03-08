@@ -46,6 +46,9 @@ pub(crate) struct Server {
     pub(crate) rcon_password: String,
     pub(crate) plugin_token: String,
     pub(crate) rcon_verified_at: String,
+    pub(crate) restart_configured: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) restart_command: Option<String>,
     pub(crate) whitelist_enabled: bool,
     pub(crate) entry_verification_enabled: bool,
     pub(crate) min_entry_rating: i32,

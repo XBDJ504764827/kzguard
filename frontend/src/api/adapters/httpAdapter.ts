@@ -141,6 +141,11 @@ export const httpApi: KzGuardApi = {
 
     return unwrap(payload);
   },
+  async restartServer(communityId, serverId) {
+    await requestJson<{ message: string }>(`/communities/${communityId}/servers/${serverId}/restart`, {
+      method: 'POST',
+    });
+  },
   async deleteServer(communityId, serverId) {
     await requestJson<{ message: string }>(`/communities/${communityId}/servers/${serverId}`, {
       method: 'DELETE',

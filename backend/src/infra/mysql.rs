@@ -170,6 +170,7 @@ pub(crate) async fn create_tables(pool: &MySqlPool) -> AppResult<()> {
           ip VARCHAR(45) NOT NULL,
           port INT NOT NULL,
           rcon_password VARCHAR(255) NOT NULL,
+          restart_command TEXT NULL,
           plugin_token VARCHAR(128) NOT NULL DEFAULT '',
           rcon_verified_at DATETIME(3) NOT NULL,
           whitelist_enabled TINYINT(1) NOT NULL DEFAULT 0,
@@ -183,6 +184,7 @@ pub(crate) async fn create_tables(pool: &MySqlPool) -> AppResult<()> {
     )
     .await?;
 
+    ensure_servers_column(pool, "restart_command", "TEXT NULL AFTER rcon_password").await?;
     ensure_servers_column(pool, "plugin_token", "VARCHAR(128) NOT NULL DEFAULT ''").await?;
     ensure_servers_column(pool, "min_entry_rating", "INT NOT NULL DEFAULT 0").await?;
     ensure_servers_column(pool, "min_steam_level", "INT NOT NULL DEFAULT 0").await?;
@@ -344,8 +346,8 @@ pub(crate) async fn seed_if_empty(pool: &MySqlPool) -> AppResult<()> {
             sqlx::query(
                 r#"
                 INSERT INTO servers (
-                  id, community_id, name, ip, port, rcon_password, plugin_token, rcon_verified_at, whitelist_enabled, entry_verification_enabled, min_entry_rating, min_steam_level
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  id, community_id, name, ip, port, rcon_password, restart_command, plugin_token, rcon_verified_at, whitelist_enabled, entry_verification_enabled, min_entry_rating, min_steam_level
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&server.id)
@@ -354,6 +356,7 @@ pub(crate) async fn seed_if_empty(pool: &MySqlPool) -> AppResult<()> {
             .bind(&server.ip)
             .bind(server.port)
             .bind(&server.rcon_password)
+            .bind(&server.restart_command)
             .bind(&server.plugin_token)
             .bind(iso_to_mysql(&server.rcon_verified_at))
             .bind(bool_to_i32(server.whitelist_enabled))

@@ -27,9 +27,14 @@ pub(crate) async fn list_communities_handler(
     headers: HeaderMap,
 ) -> AppResult<Json<ApiEnvelope<Vec<Community>>>> {
     let token = bearer_token_from_headers(&headers);
-    let _current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
 
-    let communities = communities::list_communities(&state.pool, &state.redis).await?;
+    let communities = communities::list_communities(
+        &state.pool,
+        &state.redis,
+        current_admin.role == "system_admin",
+    )
+    .await?;
     Ok(Json(ApiEnvelope::new(communities)))
 }
 
@@ -69,6 +74,7 @@ pub(crate) async fn update_community_handler(
         &path.community_id,
         body.name.unwrap_or_default(),
         Some(current_admin.id),
+        current_admin.role == "system_admin",
     )
     .await?;
 
@@ -180,6 +186,27 @@ pub(crate) async fn reset_server_plugin_token_handler(
     .await?;
 
     Ok(Json(ApiEnvelope::with_message(server, "插件 Token 已重置")))
+}
+
+pub(crate) async fn restart_server_handler(
+    State(state): State<SharedState>,
+    Path(path): Path<ServerPath>,
+    headers: HeaderMap,
+) -> AppResult<Json<MessageResponse>> {
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
+    communities::restart_server(
+        &state.pool,
+        &path.community_id,
+        &path.server_id,
+        Some(current_admin.id),
+    )
+    .await?;
+
+    Ok(Json(MessageResponse {
+        message: "重启指令已发送".to_string(),
+    }))
 }
 
 pub(crate) async fn delete_server_handler(

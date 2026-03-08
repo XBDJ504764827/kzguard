@@ -16,6 +16,7 @@ pub(crate) struct DbServer {
     pub(crate) ip: String,
     pub(crate) port: i32,
     pub(crate) rcon_password: String,
+    pub(crate) restart_command: Option<String>,
     pub(crate) plugin_token: String,
     pub(crate) rcon_verified_at: NaiveDateTime,
     pub(crate) whitelist_enabled: i8,
@@ -37,6 +38,16 @@ pub(crate) struct DbLiveServerTarget {
     pub(crate) ip: String,
     pub(crate) port: i32,
     pub(crate) rcon_password: String,
+}
+
+
+#[derive(Debug, FromRow)]
+pub(crate) struct DbServerRestartTarget {
+    pub(crate) name: String,
+    pub(crate) community_name: String,
+    pub(crate) ip: String,
+    pub(crate) port: i32,
+    pub(crate) restart_command: Option<String>,
 }
 
 #[derive(Debug, FromRow)]

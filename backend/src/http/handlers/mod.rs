@@ -20,8 +20,8 @@ pub(crate) use bans::{
 pub(crate) use communities::{
     ban_player_handler, create_community_handler, create_server_handler, delete_community_handler,
     delete_server_handler, kick_player_handler, list_communities_handler,
-    list_server_players_handler, reset_server_plugin_token_handler, update_community_handler,
-    update_server_handler, verify_server_rcon_handler,
+    list_server_players_handler, reset_server_plugin_token_handler, restart_server_handler,
+    update_community_handler, update_server_handler, verify_server_rcon_handler,
 };
 pub(crate) use health::health_handler;
 pub(crate) use operation_logs::list_operation_logs_handler;

@@ -39,6 +39,8 @@ export interface Server {
   rconPassword: string;
   pluginToken: string;
   rconVerifiedAt: string;
+  restartConfigured: boolean;
+  restartCommand?: string;
   whitelistEnabled: boolean;
   entryVerificationEnabled: boolean;
   minEntryRating: number;
@@ -131,6 +133,7 @@ export interface ServerDraft {
   ip: string;
   port: number;
   rconPassword: string;
+  restartCommand?: string;
   whitelistEnabled: boolean;
   entryVerificationEnabled: boolean;
   minEntryRating: number;
@@ -141,6 +144,7 @@ export interface ServerSettingsDraft {
   ip: string;
   port: number;
   rconPassword: string;
+  restartCommand?: string;
   whitelistEnabled: boolean;
   entryVerificationEnabled: boolean;
   minEntryRating: number;
@@ -246,6 +250,7 @@ export type OperationLogAction =
   | 'server_updated'
   | 'server_deleted'
   | 'server_plugin_token_reset'
+  | 'server_restarted'
   | 'server_player_kicked'
   | 'server_player_banned'
   | 'ban_record_manual_created'
