@@ -20,7 +20,7 @@ import type {
   WebsiteAdminCreateDraft,
   WebsiteAdminUpdateDraft,
 } from '../../types';
-import type { ApiEnvelope, KzGuardApi } from '../contracts';
+import type { ApiEnvelope, KzGuardApi, LoadStateOptions } from '../contracts';
 import { requestJson } from '../request';
 
 const unwrap = <T,>(payload: ApiEnvelope<T>) => payload.data;
@@ -44,11 +44,14 @@ export const httpApi: KzGuardApi = {
       method: 'POST',
     });
   },
-  async loadState() {
+  async loadState(options?: LoadStateOptions) {
+    const includeWhitelistRestrictions = options?.includeWhitelistRestrictions ?? true;
     const [communitiesPayload, whitelistPayload, whitelistRestrictionsPayload, bansPayload] = await Promise.all([
       requestJson<ApiEnvelope<AppState['communities']>>('/communities'),
       requestJson<ApiEnvelope<AppState['whitelist']>>('/whitelist'),
-      requestJson<ApiEnvelope<AppState['whitelistRestrictions']>>('/whitelist/restrictions'),
+      includeWhitelistRestrictions
+        ? requestJson<ApiEnvelope<AppState['whitelistRestrictions']>>('/whitelist/restrictions')
+        : Promise.resolve<ApiEnvelope<AppState['whitelistRestrictions']>>({ data: [] }),
       requestJson<ApiEnvelope<AppState['bans']>>('/bans'),
     ]);
 
@@ -232,9 +235,10 @@ export const httpApi: KzGuardApi = {
     const payload = await requestJson<ApiEnvelope<WhitelistRestriction[]>>('/whitelist/restrictions');
     return unwrap(payload);
   },
-  async addWhitelistRestriction(playerId: string): Promise<WhitelistRestriction> {
+  async addWhitelistRestriction(playerId: string, serverIds: string[]): Promise<WhitelistRestriction> {
     const payload = await requestJson<ApiEnvelope<WhitelistRestriction>>(`/whitelist/${playerId}/restriction`, {
       method: 'POST',
+      body: JSON.stringify({ serverIds }),
     });
     return unwrap(payload);
   },

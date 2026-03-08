@@ -82,7 +82,7 @@ interface AppStoreContextValue {
   manualAddPlayer: (draft: ManualWhitelistDraft) => Promise<WhitelistPlayer>;
   updateWhitelistPlayer: (playerId: string, draft: WhitelistPlayerUpdateDraft) => Promise<WhitelistPlayer>;
   deleteWhitelistPlayer: (playerId: string) => Promise<void>;
-  addWhitelistRestriction: (playerId: string) => Promise<WhitelistRestriction>;
+  addWhitelistRestriction: (playerId: string, serverIds: string[]) => Promise<WhitelistRestriction>;
   updateWhitelistRestriction: (playerId: string, serverIds: string[]) => Promise<WhitelistRestriction>;
   deleteWhitelistRestriction: (playerId: string) => Promise<void>;
 }
@@ -96,6 +96,7 @@ const createId = (prefix: string) => {
   return `${prefix}_${secureId ?? fallbackId}`;
 };
 const normalizeText = (value?: string) => value?.trim() || undefined;
+const shouldIncludeWhitelistRestrictions = (admin: WebsiteAdmin | null) => admin?.role === 'system_admin';
 const normalizeServer = (server: Server, fallback?: Partial<Server>): Server => ({
   ...server,
   whitelistEnabled: server.whitelistEnabled ?? fallback?.whitelistEnabled ?? false,
@@ -146,7 +147,9 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
 
   const hydrateProtectedState = async (activeAdmin: WebsiteAdmin | null) => {
     const [nextState, nextUserSummary, nextAdmins, nextOperationLogs] = await Promise.all([
-      apiService.loadState(),
+      apiService.loadState({
+        includeWhitelistRestrictions: shouldIncludeWhitelistRestrictions(activeAdmin),
+      }),
       apiService.getUsersSummary().catch(() => null),
       apiService.listWebsiteAdmins(),
       apiService.listOperationLogs(),
@@ -179,7 +182,9 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
   };
 
   const refreshState = async () => {
-    const nextState = await apiService.loadState();
+    const nextState = await apiService.loadState({
+      includeWhitelistRestrictions: shouldIncludeWhitelistRestrictions(currentAdmin),
+    });
     setState(nextState);
     setApiError(null);
   };
@@ -913,9 +918,8 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     );
   };
 
-
-  const addWhitelistRestriction = async (playerId: string) => {
-    const restriction = await apiService.addWhitelistRestriction(playerId);
+  const addWhitelistRestriction = async (playerId: string, serverIds: string[]) => {
+    const restriction = await apiService.addWhitelistRestriction(playerId, serverIds);
 
     setState((currentState) => ({
       ...currentState,
@@ -925,7 +929,10 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     }));
     setApiError(null);
 
-    appendOperationLog('whitelist_restriction_added', `将玩家 ${restriction.nickname} 添加到了玩家限制页。`);
+    appendOperationLog(
+      'whitelist_restriction_added',
+      `将玩家 ${restriction.nickname} 添加到了玩家限制页，当前允许进入 ${restriction.allowedServerIds.length} 台服务器。`,
+    );
 
     return restriction;
   };

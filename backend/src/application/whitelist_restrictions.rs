@@ -60,35 +60,31 @@ pub(crate) async fn list_whitelist_restrictions(
 pub(crate) async fn add_whitelist_restriction(
     pool: &MySqlPool,
     player_id: &str,
+    server_ids: Vec<String>,
     operator_id: Option<String>,
 ) -> AppResult<WhitelistRestriction> {
     let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
     ensure_system_admin(&operator, "仅系统管理员可以将玩家添加到限制页")?;
     let player = get_approved_whitelist_player(pool, player_id).await?;
+    let normalized_server_ids = normalize_server_ids(server_ids);
+    ensure_server_ids_exist(pool, &normalized_server_ids).await?;
     let now = now_iso();
 
-    let result = sqlx::query(
-        r#"
-        INSERT INTO whitelist_player_restrictions (player_id, created_at, updated_at)
-        VALUES (?, ?, ?)
-        ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at)
-        "#,
-    )
-    .bind(player_id)
-    .bind(iso_to_mysql(&now))
-    .bind(iso_to_mysql(&now))
-    .execute(pool)
-    .await?;
+    let mut tx = pool.begin().await?;
+    upsert_whitelist_restriction_servers(&mut tx, player_id, &now, &normalized_server_ids).await?;
+    tx.commit().await?;
 
-    if result.rows_affected() > 0 {
-        append_operation_log(
-            pool,
-            "whitelist_restriction_added",
-            format!("将玩家 {} 添加到了玩家限制页。", player.nickname),
-            &operator,
-        )
-        .await?;
-    }
+    append_operation_log(
+        pool,
+        "whitelist_restriction_added",
+        format!(
+            "将玩家 {} 添加到了玩家限制页，当前允许进入 {} 台服务器。",
+            player.nickname,
+            normalized_server_ids.len()
+        ),
+        &operator,
+    )
+    .await?;
 
     get_whitelist_restriction_by_player_id(pool, player_id).await
 }
@@ -107,37 +103,7 @@ pub(crate) async fn update_whitelist_restriction_servers(
     let now = now_iso();
 
     let mut tx = pool.begin().await?;
-    sqlx::query(
-        r#"
-        INSERT INTO whitelist_player_restrictions (player_id, created_at, updated_at)
-        VALUES (?, ?, ?)
-        ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at)
-        "#,
-    )
-    .bind(player_id)
-    .bind(iso_to_mysql(&now))
-    .bind(iso_to_mysql(&now))
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query("DELETE FROM whitelist_player_restriction_servers WHERE player_id = ?")
-        .bind(player_id)
-        .execute(&mut *tx)
-        .await?;
-
-    for server_id in &normalized_server_ids {
-        sqlx::query(
-            r#"
-            INSERT INTO whitelist_player_restriction_servers (player_id, server_id)
-            VALUES (?, ?)
-            "#,
-        )
-        .bind(player_id)
-        .bind(server_id)
-        .execute(&mut *tx)
-        .await?;
-    }
-
+    upsert_whitelist_restriction_servers(&mut tx, player_id, &now, &normalized_server_ids).await?;
     tx.commit().await?;
 
     append_operation_log(
@@ -227,11 +193,38 @@ async fn get_whitelist_restriction_by_player_id(
     pool: &MySqlPool,
     player_id: &str,
 ) -> AppResult<WhitelistRestriction> {
-    list_whitelist_restrictions(pool)
+    let row = sqlx::query_as::<_, DbWhitelistPlayer>(
+        r#"
+        SELECT wp.*
+          FROM whitelist_player_restrictions wr
+          INNER JOIN whitelist_players wp ON wp.id = wr.player_id
+         WHERE wr.player_id = ? AND wp.status = 'approved'
+        "#,
+    )
+    .bind(player_id)
+    .fetch_optional(pool)
+    .await?;
+    let player = row
+        .map(map_whitelist_player)
+        .ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到目标限制玩家"))?;
+    let allowed_server_ids = load_allowed_server_ids_by_player_id(pool)
         .await?
-        .into_iter()
-        .find(|entry| entry.player_id == player_id)
-        .ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到目标限制玩家"))
+        .remove(player_id)
+        .unwrap_or_default();
+
+    Ok(WhitelistRestriction {
+        player_id: player.id,
+        nickname: player.nickname,
+        steam_id64: player.steam_id64,
+        steam_id: player.steam_id,
+        steam_id3: player.steam_id3,
+        contact: player.contact,
+        note: player.note,
+        source: player.source,
+        applied_at: player.applied_at,
+        reviewed_at: player.reviewed_at,
+        allowed_server_ids,
+    })
 }
 
 async fn get_approved_whitelist_player(pool: &MySqlPool, player_id: &str) -> AppResult<crate::domain::models::WhitelistPlayer> {
@@ -292,6 +285,46 @@ async fn ensure_server_ids_exist(pool: &MySqlPool, server_ids: &[String]) -> App
             StatusCode::BAD_REQUEST,
             format!("存在无效的服务器 ID：{}", missing_server_ids.join("、")),
         ));
+    }
+
+    Ok(())
+}
+
+async fn upsert_whitelist_restriction_servers(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    player_id: &str,
+    now: &str,
+    server_ids: &[String],
+) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO whitelist_player_restrictions (player_id, created_at, updated_at)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at)
+        "#,
+    )
+    .bind(player_id)
+    .bind(iso_to_mysql(now))
+    .bind(iso_to_mysql(now))
+    .execute(&mut **tx)
+    .await?;
+
+    sqlx::query("DELETE FROM whitelist_player_restriction_servers WHERE player_id = ?")
+        .bind(player_id)
+        .execute(&mut **tx)
+        .await?;
+
+    for server_id in server_ids {
+        sqlx::query(
+            r#"
+            INSERT INTO whitelist_player_restriction_servers (player_id, server_id)
+            VALUES (?, ?)
+            "#,
+        )
+        .bind(player_id)
+        .bind(server_id)
+        .execute(&mut **tx)
+        .await?;
     }
 
     Ok(())

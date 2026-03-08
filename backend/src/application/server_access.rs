@@ -1,7 +1,7 @@
 use crate::{
     config::AccessControlConfig,
     domain::{
-        db::{DbServerAccessTarget, DbServerIdOnly, DbWhitelistPlayer},
+        db::{DbServerAccessTarget, DbWhitelistPlayer},
         models::{
             PlayerAccessProfile, ResolvedSteamIdentifiers, ServerAccessDecision,
             ServerAccessPlayer, ServerAccessSnapshot,
@@ -54,12 +54,46 @@ pub(crate) async fn refresh_all_server_access_snapshots(
     http_client: &HttpClient,
     config: &AccessControlConfig,
 ) -> AppResult<()> {
-    let server_ids = sqlx::query_as::<_, DbServerIdOnly>("SELECT id FROM servers ORDER BY id ASC")
-        .fetch_all(pool)
-        .await?;
+    let servers = load_all_server_access_targets(pool).await?;
+    let whitelist_map = load_approved_whitelist_access_map(pool).await?;
 
-    for row in server_ids {
-        refresh_server_access_snapshot(pool, redis, http_client, config, &row.id).await?;
+    for server in servers {
+        refresh_server_access_snapshot_with_whitelist_map(
+            redis,
+            http_client,
+            config,
+            server,
+            &whitelist_map,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn refresh_whitelist_restriction_player_access(
+    pool: &MySqlPool,
+    redis: &RedisClient,
+    http_client: &HttpClient,
+    config: &AccessControlConfig,
+    player_id: &str,
+) -> AppResult<()> {
+    let servers = load_all_server_access_targets(pool).await?;
+    let whitelist_map = load_approved_whitelist_access_map(pool).await?;
+    let candidate = load_approved_whitelist_access_candidate(pool, player_id).await?;
+    let whitelist_access = whitelist_map.get(&candidate.steam_id64);
+
+    for server in servers {
+        let player = resolve_server_access_player(
+            redis,
+            http_client,
+            config,
+            &server,
+            candidate.clone(),
+            whitelist_access,
+        )
+        .await?;
+        upsert_server_access_snapshot_player(redis, &server, player).await?;
     }
 
     Ok(())
@@ -74,12 +108,25 @@ pub(crate) async fn refresh_server_access_snapshot(
 ) -> AppResult<ServerAccessSnapshot> {
     let server = load_server_access_target(pool, server_id).await?;
     let whitelist_map = load_approved_whitelist_access_map(pool).await?;
-    let previous_snapshot = load_cached_server_access_snapshot(redis, server_id).await?;
-    let live_snapshot = crate::application::server_presence::load_server_players_snapshot(redis, server_id).await?;
+
+    refresh_server_access_snapshot_with_whitelist_map(redis, http_client, config, server, &whitelist_map)
+        .await
+}
+
+async fn refresh_server_access_snapshot_with_whitelist_map(
+    redis: &RedisClient,
+    http_client: &HttpClient,
+    config: &AccessControlConfig,
+    server: DbServerAccessTarget,
+    whitelist_map: &HashMap<String, ApprovedWhitelistAccess>,
+) -> AppResult<ServerAccessSnapshot> {
+    let previous_snapshot = load_cached_server_access_snapshot(redis, &server.id).await?;
+    let live_snapshot =
+        crate::application::server_presence::load_server_players_snapshot(redis, &server.id).await?;
 
     let mut candidates = HashMap::<String, AccessCandidate>::new();
 
-    for (steam_id64, access) in &whitelist_map {
+    for (steam_id64, access) in whitelist_map {
         candidates.insert(
             steam_id64.clone(),
             AccessCandidate {
@@ -573,6 +620,68 @@ async fn load_server_access_target(
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到目标服务器"))
+}
+
+async fn load_all_server_access_targets(pool: &MySqlPool) -> AppResult<Vec<DbServerAccessTarget>> {
+    sqlx::query_as::<_, DbServerAccessTarget>(
+        r#"
+        SELECT s.id,
+               s.name,
+               c.name AS community_name,
+               s.plugin_token,
+               s.whitelist_enabled,
+               s.entry_verification_enabled,
+               s.min_entry_rating,
+               s.min_steam_level
+          FROM servers s
+          INNER JOIN communities c ON c.id = s.community_id
+         ORDER BY s.id ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
+}
+
+async fn load_approved_whitelist_access_candidate(
+    pool: &MySqlPool,
+    player_id: &str,
+) -> AppResult<AccessCandidate> {
+    let row = sqlx::query_as::<_, DbWhitelistPlayer>(
+        "SELECT * FROM whitelist_players WHERE id = ? AND status = 'approved'",
+    )
+    .bind(player_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到目标白名单玩家"))?;
+
+    if !row.steam_id64.trim().is_empty() {
+        return Ok(AccessCandidate {
+            steam_id64: row.steam_id64,
+            steam_id: row.steam_id,
+            steam_id3: row.steam_id3,
+            nickname: Some(row.nickname),
+            ip_address: None,
+        });
+    }
+
+    let identifiers = resolve_steam_identifiers_strict(&row.steam_id)?;
+
+    Ok(AccessCandidate {
+        steam_id64: identifiers.steam_id64,
+        steam_id: if identifiers.steam_id.is_empty() {
+            row.steam_id
+        } else {
+            identifiers.steam_id
+        },
+        steam_id3: if identifiers.steam_id3.is_empty() {
+            row.steam_id3
+        } else {
+            identifiers.steam_id3
+        },
+        nickname: Some(row.nickname),
+        ip_address: None,
+    })
 }
 
 async fn load_approved_whitelist_access_map(

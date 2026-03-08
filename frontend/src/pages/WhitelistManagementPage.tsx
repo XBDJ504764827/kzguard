@@ -26,6 +26,12 @@ const WHITELIST_ACTIVE_TAB_STORAGE_KEY = 'kzguard_whitelist_active_tab';
 
 type WhitelistManagementTab = WhitelistStatus | 'restricted';
 
+interface RestrictionModalTarget {
+  playerId: string;
+  nickname: string;
+  existing: boolean;
+}
+
 const isWhitelistManagementTab = (value: string | null): value is WhitelistManagementTab =>
   value === 'approved' || value === 'pending' || value === 'rejected' || value === 'restricted';
 
@@ -127,7 +133,7 @@ export const WhitelistManagementPage = () => {
   const [submittingEdit, setSubmittingEdit] = useState(false);
   const [submittingReject, setSubmittingReject] = useState(false);
   const [submittingDelete, setSubmittingDelete] = useState(false);
-  const [restrictionTarget, setRestrictionTarget] = useState<WhitelistRestriction | null>(null);
+  const [restrictionTarget, setRestrictionTarget] = useState<RestrictionModalTarget | null>(null);
   const [restrictionServerIds, setRestrictionServerIds] = useState<string[]>([]);
   const [submittingRestriction, setSubmittingRestriction] = useState(false);
 
@@ -152,8 +158,8 @@ export const WhitelistManagementPage = () => {
     [state.whitelist],
   );
 
-  const restrictionPlayerIds = useMemo(
-    () => new Set(state.whitelistRestrictions.map((restriction) => restriction.playerId)),
+  const restrictionByPlayerId = useMemo(
+    () => new Map(state.whitelistRestrictions.map((restriction) => [restriction.playerId, restriction])),
     [state.whitelistRestrictions],
   );
 
@@ -185,21 +191,22 @@ export const WhitelistManagementPage = () => {
     [deleteTargetId, state.whitelist],
   );
 
-
   const openRestrictionModal = (restriction: WhitelistRestriction) => {
-    setRestrictionTarget(restriction);
+    setRestrictionTarget({
+      playerId: restriction.playerId,
+      nickname: restriction.nickname,
+      existing: true,
+    });
     setRestrictionServerIds(restriction.allowedServerIds);
   };
 
-  const handleAddRestriction = async (player: WhitelistPlayer) => {
-    try {
-      const restriction = await addWhitelistRestriction(player.id);
-      openRestrictionModal(restriction);
-      setActiveTab('restricted');
-      Message.success(`已将 ${player.nickname} 添加到玩家限制页`);
-    } catch (error) {
-      Message.error(getErrorMessage(error, '添加到限制页失败'));
-    }
+  const openCreateRestrictionModal = (player: WhitelistPlayer) => {
+    setRestrictionTarget({
+      playerId: player.id,
+      nickname: player.nickname,
+      existing: false,
+    });
+    setRestrictionServerIds([]);
   };
 
   const handleSaveRestriction = async () => {
@@ -210,13 +217,20 @@ export const WhitelistManagementPage = () => {
     setSubmittingRestriction(true);
 
     try {
-      await updateWhitelistRestriction(restrictionTarget.playerId, restrictionServerIds);
-      Message.success('限制服务器已更新');
+      if (restrictionTarget.existing) {
+        await updateWhitelistRestriction(restrictionTarget.playerId, restrictionServerIds);
+        Message.success('限制服务器已更新');
+      } else {
+        await addWhitelistRestriction(restrictionTarget.playerId, restrictionServerIds);
+        Message.success(`已将 ${restrictionTarget.nickname} 添加到玩家限制页`);
+      }
       setRestrictionTarget(null);
       setRestrictionServerIds([]);
       setActiveTab('restricted');
     } catch (error) {
-      Message.error(getErrorMessage(error, '限制服务器更新失败'));
+      Message.error(
+        getErrorMessage(error, restrictionTarget.existing ? '限制服务器更新失败' : '添加到限制页失败'),
+      );
     } finally {
       setSubmittingRestriction(false);
     }
@@ -339,7 +353,7 @@ export const WhitelistManagementPage = () => {
       width: 420,
       render: (_value: string, record: WhitelistPlayer) => {
         const canReview = record.status === 'pending' && record.source === 'application';
-        const inRestrictionPage = restrictionPlayerIds.has(record.id);
+        const restriction = restrictionByPlayerId.get(record.id);
 
         if (!canReview && !isSystemAdmin) {
           return <Typography.Text type="secondary">仅系统管理员可编辑或删除记录</Typography.Text>;
@@ -387,12 +401,12 @@ export const WhitelistManagementPage = () => {
               </Button>
             ) : null}
             {isSystemAdmin && record.status === 'approved' ? (
-              inRestrictionPage ? (
-                <Button size="small" type="outline" onClick={() => setActiveTab('restricted')}>
-                  已在限制页
+              restriction ? (
+                <Button size="small" type="outline" onClick={() => openRestrictionModal(restriction)}>
+                  设置限制服务器
                 </Button>
               ) : (
-                <Button size="small" type="outline" status="warning" onClick={() => { void handleAddRestriction(record); }}>
+                <Button size="small" type="outline" status="warning" onClick={() => openCreateRestrictionModal(record)}>
                   添加到限制页
                 </Button>
               )
@@ -694,7 +708,7 @@ export const WhitelistManagementPage = () => {
       </Modal>
 
       <Modal
-        title={restrictionTarget ? `设置限制服务器 · ${restrictionTarget.nickname}` : '设置限制服务器'}
+        title={restrictionTarget ? `${restrictionTarget.existing ? '设置限制服务器' : '添加到限制页'} · ${restrictionTarget.nickname}` : '设置限制服务器'}
         visible={Boolean(restrictionTarget)}
         confirmLoading={submittingRestriction}
         onOk={() => {
@@ -706,7 +720,15 @@ export const WhitelistManagementPage = () => {
         }}
       >
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
-          <Alert type="info" showIcon content="将玩家加入限制页后，仅允许其进入这里选中的服务器；若不选择任何服务器，则该玩家当前无法进入任何服务器。" />
+          <Alert
+            type="info"
+            showIcon
+            content={
+              restrictionTarget?.existing
+                ? '玩家已在限制页中；保存后会立即同步其可进入服务器列表。若不选择任何服务器，则该玩家当前无法进入任何服务器。'
+                : '保存后会将该玩家加入限制页，并立即同步其可进入服务器列表。若不选择任何服务器，则该玩家当前无法进入任何服务器。'
+            }
+          />
           <Typography.Text>允许进入的服务器</Typography.Text>
           <Select
             mode="multiple"

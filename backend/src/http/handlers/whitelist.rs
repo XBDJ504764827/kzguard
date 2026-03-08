@@ -37,7 +37,14 @@ pub(crate) async fn list_whitelist_restrictions_handler(
     headers: HeaderMap,
 ) -> AppResult<Json<ApiEnvelope<Vec<WhitelistRestriction>>>> {
     let token = bearer_token_from_headers(&headers);
-    let _current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
+    if current_admin.role != "system_admin" {
+        return Err(AppError::http(
+            StatusCode::FORBIDDEN,
+            "仅系统管理员可以查看玩家限制页",
+        ));
+    }
 
     let restrictions = whitelist_restrictions::list_whitelist_restrictions(&state.pool).await?;
     Ok(Json(ApiEnvelope::new(restrictions)))
@@ -47,6 +54,7 @@ pub(crate) async fn add_whitelist_restriction_handler(
     State(state): State<SharedState>,
     Path(path): Path<WhitelistPlayerPath>,
     headers: HeaderMap,
+    Json(draft): Json<WhitelistRestrictionUpdateDraft>,
 ) -> AppResult<Json<ApiEnvelope<WhitelistRestriction>>> {
     let token = bearer_token_from_headers(&headers);
     let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
@@ -54,14 +62,22 @@ pub(crate) async fn add_whitelist_restriction_handler(
     let restriction = whitelist_restrictions::add_whitelist_restriction(
         &state.pool,
         &path.player_id,
+        draft.server_ids,
         Some(current_admin.id),
     )
     .await?;
-    trigger_access_snapshot_refresh(state.clone(), "whitelist restriction add");
+    server_access::refresh_whitelist_restriction_player_access(
+        &state.pool,
+        &state.redis,
+        &state.http_client,
+        &state.access_control,
+        &path.player_id,
+    )
+    .await?;
 
     Ok(Json(ApiEnvelope::with_message(
         restriction,
-        "玩家已添加到限制页，服务器准入缓存正在后台刷新",
+        "玩家限制已创建，服务器准入缓存已同步更新",
     )))
 }
 
@@ -81,11 +97,18 @@ pub(crate) async fn update_whitelist_restriction_handler(
         Some(current_admin.id),
     )
     .await?;
-    trigger_access_snapshot_refresh(state.clone(), "whitelist restriction update");
+    server_access::refresh_whitelist_restriction_player_access(
+        &state.pool,
+        &state.redis,
+        &state.http_client,
+        &state.access_control,
+        &path.player_id,
+    )
+    .await?;
 
     Ok(Json(ApiEnvelope::with_message(
         restriction,
-        "限制服务器已更新，服务器准入缓存正在后台刷新",
+        "限制服务器已更新，服务器准入缓存已同步更新",
     )))
 }
 
@@ -103,10 +126,17 @@ pub(crate) async fn delete_whitelist_restriction_handler(
         Some(current_admin.id),
     )
     .await?;
-    trigger_access_snapshot_refresh(state.clone(), "whitelist restriction delete");
+    server_access::refresh_whitelist_restriction_player_access(
+        &state.pool,
+        &state.redis,
+        &state.http_client,
+        &state.access_control,
+        &path.player_id,
+    )
+    .await?;
 
     Ok(Json(MessageResponse {
-        message: "玩家已移出限制页，服务器准入缓存正在后台刷新".to_string(),
+        message: "玩家已移出限制页，服务器准入缓存已同步更新".to_string(),
     }))
 }
 

@@ -30,12 +30,16 @@ export interface ApiEnvelope<T> {
   message?: string;
 }
 
+export interface LoadStateOptions {
+  includeWhitelistRestrictions?: boolean;
+}
+
 export interface KzGuardApi {
   mode: ApiMode;
   login: (draft: LoginDraft) => Promise<AuthSession>;
   getAuthSession: () => Promise<WebsiteAdmin>;
   logout: () => Promise<void>;
-  loadState: () => Promise<AppState>;
+  loadState: (options?: LoadStateOptions) => Promise<AppState>;
   listWebsiteAdmins: () => Promise<WebsiteAdmin[]>;
   createWebsiteAdmin: (draft: WebsiteAdminCreateDraft) => Promise<WebsiteAdmin>;
   updateWebsiteAdmin: (adminId: string, draft: WebsiteAdminUpdateDraft) => Promise<WebsiteAdmin>;
@@ -66,7 +70,7 @@ export interface KzGuardApi {
   updateWhitelistPlayer: (playerId: string, draft: WhitelistPlayerUpdateDraft) => Promise<WhitelistPlayer>;
   deleteWhitelistPlayer: (playerId: string) => Promise<void>;
   listWhitelistRestrictions: () => Promise<WhitelistRestriction[]>;
-  addWhitelistRestriction: (playerId: string) => Promise<WhitelistRestriction>;
+  addWhitelistRestriction: (playerId: string, serverIds: string[]) => Promise<WhitelistRestriction>;
   updateWhitelistRestriction: (playerId: string, serverIds: string[]) => Promise<WhitelistRestriction>;
   deleteWhitelistRestriction: (playerId: string) => Promise<void>;
   updateWhitelistStatus: (playerId: string, status: 'approved' | 'rejected', note?: string) => Promise<void>;
