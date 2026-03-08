@@ -216,6 +216,13 @@ pub(crate) struct WhitelistPlayerPath {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct WhitelistRestrictionUpdateDraft {
+    pub(crate) server_ids: Vec<String>,
+}
+
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct InternalServerBanSyncBody {
     pub(crate) server_id: String,
     pub(crate) nickname: Option<String>,

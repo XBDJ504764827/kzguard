@@ -13,14 +13,26 @@ import {
   Typography,
 } from '@arco-design/web-react';
 import { IconPlus } from '@arco-design/web-react/icon';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '../contexts/AppStoreContext';
-import type { ManualWhitelistDraft, WhitelistPlayer, WhitelistPlayerUpdateDraft, WhitelistStatus } from '../types';
+import type { ManualWhitelistDraft, WhitelistPlayer, WhitelistPlayerUpdateDraft, WhitelistRestriction, WhitelistStatus } from '../types';
 import { getErrorMessage } from '../utils/error';
 import { websiteAdminRoleColorMap, websiteAdminRoleLabelMap } from '../utils/websiteAdmin';
 
 const TabPane = Tabs.TabPane;
 const Option = Select.Option;
+
+const WHITELIST_ACTIVE_TAB_STORAGE_KEY = 'kzguard_whitelist_active_tab';
+
+type WhitelistManagementTab = WhitelistStatus | 'restricted';
+
+const isWhitelistManagementTab = (value: string | null): value is WhitelistManagementTab =>
+  value === 'approved' || value === 'pending' || value === 'rejected' || value === 'restricted';
+
+const getInitialActiveTab = (): WhitelistManagementTab => {
+  const storedTab = globalThis.window?.localStorage?.getItem(WHITELIST_ACTIVE_TAB_STORAGE_KEY) ?? null;
+  return isWhitelistManagementTab(storedTab) ? storedTab : 'pending';
+};
 
 const createEmptyManualDraft = (): ManualWhitelistDraft => ({
   nickname: '',
@@ -96,11 +108,14 @@ export const WhitelistManagementPage = () => {
     manualAddPlayer,
     updateWhitelistPlayer,
     deleteWhitelistPlayer,
+    addWhitelistRestriction,
+    updateWhitelistRestriction,
+    deleteWhitelistRestriction,
     apiMode,
     apiError,
     bootstrapping,
   } = useAppStore();
-  const [activeTab, setActiveTab] = useState<WhitelistStatus>('pending');
+  const [activeTab, setActiveTab] = useState<WhitelistManagementTab>(getInitialActiveTab);
   const [manualModalVisible, setManualModalVisible] = useState(false);
   const [manualDraft, setManualDraft] = useState<ManualWhitelistDraft>(createEmptyManualDraft);
   const [editTargetId, setEditTargetId] = useState<string | null>(null);
@@ -112,8 +127,21 @@ export const WhitelistManagementPage = () => {
   const [submittingEdit, setSubmittingEdit] = useState(false);
   const [submittingReject, setSubmittingReject] = useState(false);
   const [submittingDelete, setSubmittingDelete] = useState(false);
+  const [restrictionTarget, setRestrictionTarget] = useState<WhitelistRestriction | null>(null);
+  const [restrictionServerIds, setRestrictionServerIds] = useState<string[]>([]);
+  const [submittingRestriction, setSubmittingRestriction] = useState(false);
 
   const isSystemAdmin = currentAdmin?.role === 'system_admin';
+
+  useEffect(() => {
+    globalThis.window?.localStorage?.setItem(WHITELIST_ACTIVE_TAB_STORAGE_KEY, activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!isSystemAdmin && activeTab === 'restricted') {
+      setActiveTab('pending');
+    }
+  }, [activeTab, isSystemAdmin]);
 
   const groupedPlayers = useMemo(
     () => ({
@@ -122,6 +150,26 @@ export const WhitelistManagementPage = () => {
       rejected: state.whitelist.filter((player) => player.status === 'rejected'),
     }),
     [state.whitelist],
+  );
+
+  const restrictionPlayerIds = useMemo(
+    () => new Set(state.whitelistRestrictions.map((restriction) => restriction.playerId)),
+    [state.whitelistRestrictions],
+  );
+
+  const serverOptions = useMemo(
+    () =>
+      state.communities.flatMap((community) =>
+        community.servers.map((server) => ({
+          value: server.id,
+          label: `${community.name} / ${server.name} (${server.ip}:${server.port})`,
+        })),
+      ),
+    [state.communities],
+  );
+  const serverNameMap = useMemo(
+    () => new Map(serverOptions.map((option) => [option.value, option.label])),
+    [serverOptions],
   );
 
   const editingPlayer = useMemo(
@@ -136,6 +184,110 @@ export const WhitelistManagementPage = () => {
     () => state.whitelist.find((player) => player.id === deleteTargetId) ?? null,
     [deleteTargetId, state.whitelist],
   );
+
+
+  const openRestrictionModal = (restriction: WhitelistRestriction) => {
+    setRestrictionTarget(restriction);
+    setRestrictionServerIds(restriction.allowedServerIds);
+  };
+
+  const handleAddRestriction = async (player: WhitelistPlayer) => {
+    try {
+      const restriction = await addWhitelistRestriction(player.id);
+      openRestrictionModal(restriction);
+      setActiveTab('restricted');
+      Message.success(`已将 ${player.nickname} 添加到玩家限制页`);
+    } catch (error) {
+      Message.error(getErrorMessage(error, '添加到限制页失败'));
+    }
+  };
+
+  const handleSaveRestriction = async () => {
+    if (!restrictionTarget) {
+      return;
+    }
+
+    setSubmittingRestriction(true);
+
+    try {
+      await updateWhitelistRestriction(restrictionTarget.playerId, restrictionServerIds);
+      Message.success('限制服务器已更新');
+      setRestrictionTarget(null);
+      setRestrictionServerIds([]);
+      setActiveTab('restricted');
+    } catch (error) {
+      Message.error(getErrorMessage(error, '限制服务器更新失败'));
+    } finally {
+      setSubmittingRestriction(false);
+    }
+  };
+
+  const handleRemoveRestriction = (restriction: WhitelistRestriction) => {
+    Modal.confirm({
+      title: '移出玩家限制页',
+      content: `确认将 ${restriction.nickname} 移出玩家限制页吗？移出后该玩家将不再受单独服务器限制。`,
+      okButtonProps: { status: 'danger' },
+      onOk: async () => {
+        try {
+          await deleteWhitelistRestriction(restriction.playerId);
+          if (restrictionTarget?.playerId === restriction.playerId) {
+            setRestrictionTarget(null);
+            setRestrictionServerIds([]);
+          }
+          Message.success(`已将 ${restriction.nickname} 移出玩家限制页`);
+        } catch (error) {
+          Message.error(getErrorMessage(error, '移出限制页失败'));
+          throw error;
+        }
+      },
+    });
+  };
+
+  const restrictionColumns = [
+    {
+      title: '玩家信息',
+      dataIndex: 'nickname',
+      width: 340,
+      render: (_value: string, record: WhitelistRestriction) => (
+        <Space direction="vertical" size="mini">
+          <Typography.Text style={{ fontWeight: 600 }}>{record.nickname}</Typography.Text>
+          <Typography.Text type="secondary">联系方式：{record.contact || '-'}</Typography.Text>
+          <Typography.Text type="secondary">SteamID64：{record.steamId64 || '-'}</Typography.Text>
+          <Typography.Text type="secondary">SteamID：{record.steamId}</Typography.Text>
+          <Typography.Text type="secondary">SteamID3：{record.steamId3 || '-'}</Typography.Text>
+        </Space>
+      ),
+    },
+    {
+      title: '可进入服务器',
+      dataIndex: 'allowedServerIds',
+      render: (value: string[]) =>
+        value.length ? (
+          <Space size="mini" wrap>
+            {value.map((serverId) => (
+              <Tag key={serverId} color="arcoblue">{serverNameMap.get(serverId) || serverId}</Tag>
+            ))}
+          </Space>
+        ) : (
+          <Typography.Text type="secondary">暂未设置；当前将无法进入任何服务器</Typography.Text>
+        ),
+    },
+    {
+      title: '操作',
+      dataIndex: 'playerId',
+      width: 260,
+      render: (_value: string, record: WhitelistRestriction) => (
+        <Space wrap size="mini">
+          <Button size="small" type="primary" onClick={() => openRestrictionModal(record)}>
+            设置可进服务器
+          </Button>
+          <Button size="small" status="danger" onClick={() => handleRemoveRestriction(record)}>
+            移出限制页
+          </Button>
+        </Space>
+      ),
+    },
+  ];
 
   const columns = [
     {
@@ -184,9 +336,10 @@ export const WhitelistManagementPage = () => {
     {
       title: '操作',
       dataIndex: 'id',
-      width: 320,
+      width: 420,
       render: (_value: string, record: WhitelistPlayer) => {
         const canReview = record.status === 'pending' && record.source === 'application';
+        const inRestrictionPage = restrictionPlayerIds.has(record.id);
 
         if (!canReview && !isSystemAdmin) {
           return <Typography.Text type="secondary">仅系统管理员可编辑或删除记录</Typography.Text>;
@@ -232,6 +385,17 @@ export const WhitelistManagementPage = () => {
               >
                 编辑
               </Button>
+            ) : null}
+            {isSystemAdmin && record.status === 'approved' ? (
+              inRestrictionPage ? (
+                <Button size="small" type="outline" onClick={() => setActiveTab('restricted')}>
+                  已在限制页
+                </Button>
+              ) : (
+                <Button size="small" type="outline" status="warning" onClick={() => { void handleAddRestriction(record); }}>
+                  添加到限制页
+                </Button>
+              )
             ) : null}
             {isSystemAdmin ? (
               <Button
@@ -363,6 +527,7 @@ export const WhitelistManagementPage = () => {
               <Tag color="green">已通过 {groupedPlayers.approved.length}</Tag>
               <Tag color="orange">待审核 {groupedPlayers.pending.length}</Tag>
               <Tag color="red">已拒绝 {groupedPlayers.rejected.length}</Tag>
+              <Tag color="purple">限制页 {state.whitelistRestrictions.length}</Tag>
               {isSystemAdmin ? (
                 <Button type="primary" icon={<IconPlus />} onClick={() => setManualModalVisible(true)}>
                   管理员手动添加
@@ -382,7 +547,7 @@ export const WhitelistManagementPage = () => {
             showIcon
             content={
               isSystemAdmin
-                ? '系统管理员可手动录入、编辑、删除白名单记录，并可继续审核玩家申请。'
+                ? '系统管理员可手动录入、编辑、删除白名单记录，并可继续审核玩家申请；已通过玩家还可加入玩家限制页并单独配置可进入的服务器。'
                 : '普通管理员仅可审核玩家主动提交的白名单申请，不能手动添加、编辑或删除记录；驳回时必须填写缘由。'
             }
           />
@@ -392,7 +557,7 @@ export const WhitelistManagementPage = () => {
       </Card>
 
       <Card className="table-card">
-        <Tabs activeTab={activeTab} onChange={(value) => setActiveTab(value as WhitelistStatus)}>
+        <Tabs activeTab={activeTab} onChange={(value) => setActiveTab(value as WhitelistManagementTab)}>
           <TabPane key="approved" title={`已通过 (${groupedPlayers.approved.length})`}>
             <Table rowKey="id" columns={columns} data={groupedPlayers.approved} pagination={false} scroll={{ x: 1300 }} />
           </TabPane>
@@ -402,6 +567,11 @@ export const WhitelistManagementPage = () => {
           <TabPane key="rejected" title={`已拒绝 (${groupedPlayers.rejected.length})`}>
             <Table rowKey="id" columns={columns} data={groupedPlayers.rejected} pagination={false} scroll={{ x: 1300 }} />
           </TabPane>
+          {isSystemAdmin ? (
+            <TabPane key="restricted" title={`玩家限制页 (${state.whitelistRestrictions.length})`}>
+              <Table rowKey="playerId" columns={restrictionColumns} data={state.whitelistRestrictions} pagination={false} scroll={{ x: 1300 }} />
+            </TabPane>
+          ) : null}
         </Tabs>
       </Card>
 
@@ -520,6 +690,42 @@ export const WhitelistManagementPage = () => {
             onChange={setRejectReason}
             placeholder="例如：当前未提供社区身份信息，请补充 QQ 群名片或赛图记录后重新申请"
           />
+        </Space>
+      </Modal>
+
+      <Modal
+        title={restrictionTarget ? `设置限制服务器 · ${restrictionTarget.nickname}` : '设置限制服务器'}
+        visible={Boolean(restrictionTarget)}
+        confirmLoading={submittingRestriction}
+        onOk={() => {
+          void handleSaveRestriction();
+        }}
+        onCancel={() => {
+          setRestrictionTarget(null);
+          setRestrictionServerIds([]);
+        }}
+      >
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Alert type="info" showIcon content="将玩家加入限制页后，仅允许其进入这里选中的服务器；若不选择任何服务器，则该玩家当前无法进入任何服务器。" />
+          <Typography.Text>允许进入的服务器</Typography.Text>
+          <Select
+            mode="multiple"
+            allowClear
+            value={restrictionServerIds}
+            onChange={(value) => setRestrictionServerIds(value as string[])}
+            placeholder={serverOptions.length ? '请选择允许进入的服务器' : '当前没有可选服务器'}
+          >
+            {serverOptions.map((option) => (
+              <Option key={option.value} value={option.value}>{option.label}</Option>
+            ))}
+          </Select>
+          {restrictionServerIds.length ? (
+            <Space size="mini" wrap>
+              {restrictionServerIds.map((serverId) => (
+                <Tag key={serverId} color="arcoblue">{serverNameMap.get(serverId) || serverId}</Tag>
+              ))}
+            </Space>
+          ) : null}
         </Space>
       </Modal>
 

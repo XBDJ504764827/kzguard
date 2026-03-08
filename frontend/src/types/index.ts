@@ -77,6 +77,20 @@ export interface WhitelistPlayer {
   reviewedAt?: string;
 }
 
+export interface WhitelistRestriction {
+  playerId: string;
+  nickname: string;
+  steamId64: string;
+  steamId: string;
+  steamId3: string;
+  contact?: string;
+  note?: string;
+  source: WhitelistSource;
+  appliedAt: string;
+  reviewedAt?: string;
+  allowedServerIds: string[];
+}
+
 export interface WhitelistApplicationHistory {
   steamId64: string;
   steamId: string;
@@ -125,6 +139,7 @@ export interface BanRecord {
 export interface AppState {
   communities: Community[];
   whitelist: WhitelistPlayer[];
+  whitelistRestrictions: WhitelistRestriction[];
   bans: BanRecord[];
 }
 
@@ -262,6 +277,9 @@ export type OperationLogAction =
   | 'whitelist_manual_added'
   | 'whitelist_player_updated'
   | 'whitelist_player_deleted'
+  | 'whitelist_restriction_added'
+  | 'whitelist_restriction_updated'
+  | 'whitelist_restriction_removed'
   | 'whitelist_application_simulated'
   | 'admin_created'
   | 'admin_profile_updated';

@@ -6,14 +6,14 @@ use axum::{
 };
 
 use crate::{
-    application::{auth, server_access, whitelist},
-    domain::models::WhitelistPlayer,
+    application::{auth, server_access, whitelist, whitelist_restrictions},
+    domain::models::{WhitelistPlayer, WhitelistRestriction},
     error::{AppError, AppResult},
     http::{
         common::{ApiEnvelope, MessageResponse},
         requests::{
             ManualWhitelistDraft, ReviewWhitelistBody, WhitelistPlayerPath,
-            WhitelistPlayerUpdateDraft, WhitelistQuery,
+            WhitelistPlayerUpdateDraft, WhitelistQuery, WhitelistRestrictionUpdateDraft,
         },
     },
     state::SharedState,
@@ -30,6 +30,84 @@ pub(crate) async fn list_whitelist_handler(
 
     let whitelist = whitelist::list_whitelist(&state.pool, query.status).await?;
     Ok(Json(ApiEnvelope::new(whitelist)))
+}
+
+pub(crate) async fn list_whitelist_restrictions_handler(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> AppResult<Json<ApiEnvelope<Vec<WhitelistRestriction>>>> {
+    let token = bearer_token_from_headers(&headers);
+    let _current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
+    let restrictions = whitelist_restrictions::list_whitelist_restrictions(&state.pool).await?;
+    Ok(Json(ApiEnvelope::new(restrictions)))
+}
+
+pub(crate) async fn add_whitelist_restriction_handler(
+    State(state): State<SharedState>,
+    Path(path): Path<WhitelistPlayerPath>,
+    headers: HeaderMap,
+) -> AppResult<Json<ApiEnvelope<WhitelistRestriction>>> {
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
+    let restriction = whitelist_restrictions::add_whitelist_restriction(
+        &state.pool,
+        &path.player_id,
+        Some(current_admin.id),
+    )
+    .await?;
+    trigger_access_snapshot_refresh(state.clone(), "whitelist restriction add");
+
+    Ok(Json(ApiEnvelope::with_message(
+        restriction,
+        "玩家已添加到限制页，服务器准入缓存正在后台刷新",
+    )))
+}
+
+pub(crate) async fn update_whitelist_restriction_handler(
+    State(state): State<SharedState>,
+    Path(path): Path<WhitelistPlayerPath>,
+    headers: HeaderMap,
+    Json(draft): Json<WhitelistRestrictionUpdateDraft>,
+) -> AppResult<Json<ApiEnvelope<WhitelistRestriction>>> {
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
+    let restriction = whitelist_restrictions::update_whitelist_restriction_servers(
+        &state.pool,
+        &path.player_id,
+        draft.server_ids,
+        Some(current_admin.id),
+    )
+    .await?;
+    trigger_access_snapshot_refresh(state.clone(), "whitelist restriction update");
+
+    Ok(Json(ApiEnvelope::with_message(
+        restriction,
+        "限制服务器已更新，服务器准入缓存正在后台刷新",
+    )))
+}
+
+pub(crate) async fn delete_whitelist_restriction_handler(
+    State(state): State<SharedState>,
+    Path(path): Path<WhitelistPlayerPath>,
+    headers: HeaderMap,
+) -> AppResult<Json<MessageResponse>> {
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
+    whitelist_restrictions::delete_whitelist_restriction(
+        &state.pool,
+        &path.player_id,
+        Some(current_admin.id),
+    )
+    .await?;
+    trigger_access_snapshot_refresh(state.clone(), "whitelist restriction delete");
+
+    Ok(Json(MessageResponse {
+        message: "玩家已移出限制页，服务器准入缓存正在后台刷新".to_string(),
+    }))
 }
 
 pub(crate) async fn create_whitelist_manual_handler(

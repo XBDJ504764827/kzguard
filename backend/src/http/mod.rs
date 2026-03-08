@@ -88,10 +88,20 @@ pub(crate) fn build_router(state: SharedState) -> Router {
             post(ban_player_handler),
         )
         .route("/api/whitelist", get(list_whitelist_handler))
+        .route(
+            "/api/whitelist/restrictions",
+            get(list_whitelist_restrictions_handler),
+        )
         .route("/api/whitelist/manual", post(create_whitelist_manual_handler))
         .route(
             "/api/whitelist/{player_id}",
             patch(update_whitelist_player_handler).delete(delete_whitelist_player_handler),
+        )
+        .route(
+            "/api/whitelist/{player_id}/restriction",
+            post(add_whitelist_restriction_handler)
+                .patch(update_whitelist_restriction_handler)
+                .delete(delete_whitelist_restriction_handler),
         )
         .route(
             "/api/whitelist/{player_id}/status",

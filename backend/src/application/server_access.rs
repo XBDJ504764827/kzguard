@@ -41,6 +41,13 @@ struct AccessCandidate {
     ip_address: Option<String>,
 }
 
+
+#[derive(Debug, Clone)]
+struct ApprovedWhitelistAccess {
+    nickname: String,
+    allowed_server_ids: Option<HashSet<String>>,
+}
+
 pub(crate) async fn refresh_all_server_access_snapshots(
     pool: &MySqlPool,
     redis: &RedisClient,
@@ -66,20 +73,20 @@ pub(crate) async fn refresh_server_access_snapshot(
     server_id: &str,
 ) -> AppResult<ServerAccessSnapshot> {
     let server = load_server_access_target(pool, server_id).await?;
-    let whitelist_map = load_approved_whitelist_map(pool).await?;
+    let whitelist_map = load_approved_whitelist_access_map(pool).await?;
     let previous_snapshot = load_cached_server_access_snapshot(redis, server_id).await?;
     let live_snapshot = crate::application::server_presence::load_server_players_snapshot(redis, server_id).await?;
 
     let mut candidates = HashMap::<String, AccessCandidate>::new();
 
-    for (steam_id64, nickname) in &whitelist_map {
+    for (steam_id64, access) in &whitelist_map {
         candidates.insert(
             steam_id64.clone(),
             AccessCandidate {
                 steam_id64: steam_id64.clone(),
                 steam_id: String::new(),
                 steam_id3: String::new(),
-                nickname: Some(nickname.clone()),
+                nickname: Some(access.nickname.clone()),
                 ip_address: None,
             },
         );
@@ -140,10 +147,9 @@ pub(crate) async fn refresh_server_access_snapshot(
     }
 
     let mut players = Vec::with_capacity(candidates.len());
-    let whitelist_ids = whitelist_map.keys().cloned().collect::<HashSet<_>>();
 
     for candidate in candidates.into_values() {
-        let whitelist_nickname = whitelist_map.get(&candidate.steam_id64).cloned();
+        let whitelist_access = whitelist_map.get(&candidate.steam_id64);
         players.push(
             resolve_server_access_player(
                 redis,
@@ -151,8 +157,7 @@ pub(crate) async fn refresh_server_access_snapshot(
                 config,
                 &server,
                 candidate,
-                &whitelist_ids,
-                whitelist_nickname,
+                whitelist_access,
             )
             .await?,
         );
@@ -205,8 +210,7 @@ pub(crate) async fn check_player_access_for_server(
     input: AccessCheckInput,
 ) -> AppResult<ServerAccessDecision> {
     let server = authenticate_server(pool, server_id, provided_plugin_token).await?;
-    let whitelist_map = load_approved_whitelist_map(pool).await?;
-    let whitelist_ids = whitelist_map.keys().cloned().collect::<HashSet<_>>();
+    let whitelist_map = load_approved_whitelist_access_map(pool).await?;
     let candidate = normalize_access_check_input(input)?;
 
     let player = resolve_server_access_player(
@@ -215,8 +219,7 @@ pub(crate) async fn check_player_access_for_server(
         config,
         &server,
         candidate.clone(),
-        &whitelist_ids,
-        whitelist_map.get(&candidate.steam_id64).cloned(),
+        whitelist_map.get(&candidate.steam_id64),
     )
     .await?;
 
@@ -342,12 +345,16 @@ async fn resolve_server_access_player(
     config: &AccessControlConfig,
     server: &DbServerAccessTarget,
     candidate: AccessCandidate,
-    whitelist_ids: &HashSet<String>,
-    whitelist_nickname: Option<String>,
+    whitelist_access: Option<&ApprovedWhitelistAccess>,
 ) -> AppResult<ServerAccessPlayer> {
     let whitelist_enabled = server.whitelist_enabled != 0;
     let entry_verification_enabled = server.entry_verification_enabled != 0;
-    let is_whitelisted = whitelist_ids.contains(&candidate.steam_id64);
+    let is_whitelisted = whitelist_access.is_some();
+    let restriction_enabled = whitelist_access.and_then(|value| value.allowed_server_ids.as_ref()).is_some();
+    let allowed_by_restriction = whitelist_access
+        .and_then(|value| value.allowed_server_ids.as_ref())
+        .map(|server_ids| server_ids.contains(&server.id))
+        .unwrap_or(true);
     let should_resolve_profile = entry_verification_enabled
         && (server.min_entry_rating > 0 || server.min_steam_level > 0);
 
@@ -377,18 +384,21 @@ async fn resolve_server_access_player(
         false
     };
 
-    let can_join = match (whitelist_enabled, entry_verification_enabled) {
+    let base_can_join = match (whitelist_enabled, entry_verification_enabled) {
         (true, true) => is_whitelisted || meets_entry_verification,
         (true, false) => is_whitelisted,
         (false, true) => meets_entry_verification,
         (false, false) => true,
     };
+    let can_join = allowed_by_restriction && base_can_join;
 
     let message = build_access_message(
         whitelist_enabled,
         entry_verification_enabled,
         is_whitelisted,
         meets_entry_verification,
+        restriction_enabled,
+        allowed_by_restriction,
         profile_available,
         server.min_entry_rating,
         server.min_steam_level,
@@ -415,7 +425,7 @@ async fn resolve_server_access_player(
         nickname: candidate
             .nickname
             .clone()
-            .or_else(|| whitelist_nickname.clone())
+            .or_else(|| whitelist_access.map(|value| value.nickname.clone()))
             .or_else(|| profile.as_ref().and_then(|value| value.nickname.clone()))
             .unwrap_or_else(|| candidate.steam_id64.clone()),
         ip_address: candidate.ip_address.clone(),
@@ -565,27 +575,39 @@ async fn load_server_access_target(
     .ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到目标服务器"))
 }
 
-async fn load_approved_whitelist_map(pool: &MySqlPool) -> AppResult<HashMap<String, String>> {
+async fn load_approved_whitelist_access_map(
+    pool: &MySqlPool,
+) -> AppResult<HashMap<String, ApprovedWhitelistAccess>> {
     let rows = sqlx::query_as::<_, DbWhitelistPlayer>(
         "SELECT * FROM whitelist_players WHERE status = 'approved' ORDER BY applied_at DESC",
     )
     .fetch_all(pool)
     .await?;
+    let restriction_map = crate::application::whitelist_restrictions::load_restricted_player_allowed_server_ids_by_steam_id64(pool).await?;
 
     let mut whitelist = HashMap::new();
     for row in rows {
+        let allowed_server_ids = if !row.steam_id64.trim().is_empty() {
+            restriction_map.get(&row.steam_id64).cloned()
+        } else {
+            None
+        };
+
         if !row.steam_id64.trim().is_empty() {
-            whitelist
-                .entry(row.steam_id64.clone())
-                .or_insert(row.nickname.clone());
+            whitelist.entry(row.steam_id64.clone()).or_insert(ApprovedWhitelistAccess {
+                nickname: row.nickname.clone(),
+                allowed_server_ids,
+            });
             continue;
         }
 
         match resolve_steam_identifiers_strict(&row.steam_id) {
             Ok(identifiers) => {
-                whitelist
-                    .entry(identifiers.steam_id64)
-                    .or_insert(row.nickname.clone());
+                let normalized_allowed_server_ids = restriction_map.get(&identifiers.steam_id64).cloned();
+                whitelist.entry(identifiers.steam_id64).or_insert(ApprovedWhitelistAccess {
+                    nickname: row.nickname.clone(),
+                    allowed_server_ids: normalized_allowed_server_ids,
+                });
             }
             Err(error) => {
                 eprintln!(
@@ -752,10 +774,16 @@ fn build_access_message(
     entry_verification_enabled: bool,
     is_whitelisted: bool,
     meets_entry_verification: bool,
+    restriction_enabled: bool,
+    allowed_by_restriction: bool,
     profile_available: bool,
     min_entry_rating: i32,
     min_steam_level: i32,
 ) -> String {
+    if restriction_enabled && !allowed_by_restriction {
+        return "你已被加入玩家限制页，当前服务器不在你的允许列表中。".to_string();
+    }
+
     if !whitelist_enabled && !entry_verification_enabled {
         return "当前服务器未开启白名单与进服验证，允许进入。".to_string();
     }

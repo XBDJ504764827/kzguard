@@ -1,7 +1,7 @@
 use crate::{
     application::{
         admins::get_operator_snapshot, mappers::map_whitelist_player,
-        operation_logs::append_operation_log,
+        operation_logs::append_operation_log, whitelist_restrictions,
     },
     domain::{
         db::DbWhitelistPlayer,
@@ -219,6 +219,10 @@ pub(crate) async fn review_whitelist_player(
         .execute(pool)
         .await?;
 
+    if status != "approved" {
+        whitelist_restrictions::cleanup_whitelist_restriction_for_player(pool, player_id).await?;
+    }
+
     let detail = if let Some(note) = next_note
         .clone()
         .filter(|_| note_was_provided(&next_note, &existing.note))
@@ -318,6 +322,8 @@ pub(crate) async fn delete_whitelist_player(
     let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
     ensure_system_admin(&operator, "仅系统管理员可以删除白名单记录")?;
     let existing = get_whitelist_player(pool, player_id).await?;
+
+    whitelist_restrictions::cleanup_whitelist_restriction_for_player(pool, player_id).await?;
 
     sqlx::query("DELETE FROM whitelist_players WHERE id = ?")
         .bind(player_id)

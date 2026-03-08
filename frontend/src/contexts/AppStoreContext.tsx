@@ -32,6 +32,7 @@ import type {
   WebsiteAdminUpdateDraft,
   WhitelistPlayer,
   WhitelistPlayerUpdateDraft,
+  WhitelistRestriction,
 } from '../types';
 import { banTypeLabelMap, getBanDurationLabel } from '../utils/ban';
 import { applyTheme, getPreferredTheme, persistTheme } from '../utils/theme';
@@ -39,6 +40,7 @@ import { applyTheme, getPreferredTheme, persistTheme } from '../utils/theme';
 const emptyState: AppState = {
   communities: [],
   whitelist: [],
+  whitelistRestrictions: [],
   bans: [],
 };
 
@@ -80,6 +82,9 @@ interface AppStoreContextValue {
   manualAddPlayer: (draft: ManualWhitelistDraft) => Promise<WhitelistPlayer>;
   updateWhitelistPlayer: (playerId: string, draft: WhitelistPlayerUpdateDraft) => Promise<WhitelistPlayer>;
   deleteWhitelistPlayer: (playerId: string) => Promise<void>;
+  addWhitelistRestriction: (playerId: string) => Promise<WhitelistRestriction>;
+  updateWhitelistRestriction: (playerId: string, serverIds: string[]) => Promise<WhitelistRestriction>;
+  deleteWhitelistRestriction: (playerId: string) => Promise<void>;
 }
 
 const AppStoreContext = createContext<AppStoreContextValue | null>(null);
@@ -380,9 +385,15 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
 
     await apiService.deleteCommunity(communityId);
 
+    const deletedServerIds = community.servers.map((server) => server.id);
+
     setState((currentState) => ({
       ...currentState,
       communities: currentState.communities.filter((item) => item.id !== communityId),
+      whitelistRestrictions: currentState.whitelistRestrictions.map((restriction) => ({
+        ...restriction,
+        allowedServerIds: restriction.allowedServerIds.filter((serverId) => !deletedServerIds.includes(serverId)),
+      })),
     }));
     setApiError(null);
 
@@ -558,6 +569,10 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
           servers: communityItem.servers.filter((serverItem) => serverItem.id !== serverId),
         };
       }),
+      whitelistRestrictions: currentState.whitelistRestrictions.map((restriction) => ({
+        ...restriction,
+        allowedServerIds: restriction.allowedServerIds.filter((allowedServerId) => allowedServerId !== serverId),
+      })),
     }));
     setApiError(null);
 
@@ -797,6 +812,10 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
           reviewedAt: new Date().toISOString(),
         };
       }),
+      whitelistRestrictions:
+        status === 'approved'
+          ? currentState.whitelistRestrictions
+          : currentState.whitelistRestrictions.filter((restriction) => restriction.playerId !== playerId),
     }));
     setApiError(null);
 
@@ -848,6 +867,22 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     setState((currentState) => ({
       ...currentState,
       whitelist: currentState.whitelist.map((player) => (player.id === playerId ? updatedPlayer : player)),
+      whitelistRestrictions: currentState.whitelistRestrictions.map((restriction) =>
+        restriction.playerId === playerId
+          ? {
+              ...restriction,
+              nickname: updatedPlayer.nickname,
+              steamId64: updatedPlayer.steamId64,
+              steamId: updatedPlayer.steamId,
+              steamId3: updatedPlayer.steamId3,
+              contact: updatedPlayer.contact,
+              note: updatedPlayer.note,
+              source: updatedPlayer.source,
+              appliedAt: updatedPlayer.appliedAt,
+              reviewedAt: updatedPlayer.reviewedAt,
+            }
+          : restriction,
+      ),
     }));
     setApiError(null);
 
@@ -868,6 +903,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     setState((currentState) => ({
       ...currentState,
       whitelist: currentState.whitelist.filter((player) => player.id !== playerId),
+      whitelistRestrictions: currentState.whitelistRestrictions.filter((restriction) => restriction.playerId !== playerId),
     }));
     setApiError(null);
 
@@ -875,6 +911,60 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       'whitelist_player_deleted',
       `删除了白名单玩家 ${currentPlayer.nickname}（${currentPlayer.source === 'manual' ? '管理员手动录入' : '玩家申请'}）。`,
     );
+  };
+
+
+  const addWhitelistRestriction = async (playerId: string) => {
+    const restriction = await apiService.addWhitelistRestriction(playerId);
+
+    setState((currentState) => ({
+      ...currentState,
+      whitelistRestrictions: currentState.whitelistRestrictions.some((item) => item.playerId === playerId)
+        ? currentState.whitelistRestrictions.map((item) => (item.playerId === playerId ? restriction : item))
+        : [restriction, ...currentState.whitelistRestrictions],
+    }));
+    setApiError(null);
+
+    appendOperationLog('whitelist_restriction_added', `将玩家 ${restriction.nickname} 添加到了玩家限制页。`);
+
+    return restriction;
+  };
+
+  const updateWhitelistRestriction = async (playerId: string, serverIds: string[]) => {
+    const restriction = await apiService.updateWhitelistRestriction(playerId, serverIds);
+
+    setState((currentState) => ({
+      ...currentState,
+      whitelistRestrictions: currentState.whitelistRestrictions.some((item) => item.playerId === playerId)
+        ? currentState.whitelistRestrictions.map((item) => (item.playerId === playerId ? restriction : item))
+        : [restriction, ...currentState.whitelistRestrictions],
+    }));
+    setApiError(null);
+
+    appendOperationLog(
+      'whitelist_restriction_updated',
+      `更新了玩家 ${restriction.nickname} 的限制服务器，当前允许进入 ${restriction.allowedServerIds.length} 台服务器。`,
+    );
+
+    return restriction;
+  };
+
+  const deleteWhitelistRestriction = async (playerId: string) => {
+    const currentRestriction = state.whitelistRestrictions.find((item) => item.playerId === playerId);
+
+    if (!currentRestriction) {
+      throw new Error('未找到要移除的限制记录');
+    }
+
+    await apiService.deleteWhitelistRestriction(playerId);
+
+    setState((currentState) => ({
+      ...currentState,
+      whitelistRestrictions: currentState.whitelistRestrictions.filter((item) => item.playerId !== playerId),
+    }));
+    setApiError(null);
+
+    appendOperationLog('whitelist_restriction_removed', `将玩家 ${currentRestriction.nickname} 移出了玩家限制页。`);
   };
 
   const value = useMemo<AppStoreContextValue>(
@@ -916,6 +1006,9 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       manualAddPlayer,
       updateWhitelistPlayer,
       deleteWhitelistPlayer,
+      addWhitelistRestriction,
+      updateWhitelistRestriction,
+      deleteWhitelistRestriction,
     }),
     [apiError, authToken, bootstrapping, currentAdmin, operationLogs, state, theme, userSummary, websiteUsers],
   );

@@ -233,6 +233,32 @@ pub(crate) async fn create_tables(pool: &MySqlPool) -> AppResult<()> {
 
     pool.execute(
         r#"
+        CREATE TABLE IF NOT EXISTS whitelist_player_restrictions (
+          player_id VARCHAR(64) PRIMARY KEY,
+          created_at DATETIME(3) NOT NULL,
+          updated_at DATETIME(3) NOT NULL,
+          CONSTRAINT fk_whitelist_restrictions_player FOREIGN KEY (player_id) REFERENCES whitelist_players(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        "#,
+    )
+    .await?;
+
+    pool.execute(
+        r#"
+        CREATE TABLE IF NOT EXISTS whitelist_player_restriction_servers (
+          player_id VARCHAR(64) NOT NULL,
+          server_id VARCHAR(64) NOT NULL,
+          PRIMARY KEY (player_id, server_id),
+          CONSTRAINT fk_whitelist_restriction_servers_player FOREIGN KEY (player_id) REFERENCES whitelist_players(id) ON DELETE CASCADE,
+          CONSTRAINT fk_whitelist_restriction_servers_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
+          INDEX idx_whitelist_restriction_server_id (server_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        "#,
+    )
+    .await?;
+
+    pool.execute(
+        r#"
         CREATE TABLE IF NOT EXISTS ban_records (
           id VARCHAR(64) PRIMARY KEY,
           nickname VARCHAR(255) NULL,

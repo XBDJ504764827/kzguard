@@ -94,6 +94,25 @@ pub(crate) struct WhitelistPlayer {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct WhitelistRestriction {
+    pub(crate) player_id: String,
+    pub(crate) nickname: String,
+    pub(crate) steam_id64: String,
+    pub(crate) steam_id: String,
+    pub(crate) steam_id3: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) contact: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) note: Option<String>,
+    pub(crate) source: String,
+    pub(crate) applied_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reviewed_at: Option<String>,
+    pub(crate) allowed_server_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct WhitelistApplicationHistory {
     pub(crate) steam_id64: String,
     pub(crate) steam_id: String,

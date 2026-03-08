@@ -9,6 +9,7 @@ import type {
   ManualBanDraft,
   ManualWhitelistDraft,
   WhitelistPlayerUpdateDraft,
+  WhitelistRestriction,
   OperationLog,
   ServerDraft,
   ServerPlayersSnapshot,
@@ -44,15 +45,17 @@ export const httpApi: KzGuardApi = {
     });
   },
   async loadState() {
-    const [communitiesPayload, whitelistPayload, bansPayload] = await Promise.all([
+    const [communitiesPayload, whitelistPayload, whitelistRestrictionsPayload, bansPayload] = await Promise.all([
       requestJson<ApiEnvelope<AppState['communities']>>('/communities'),
       requestJson<ApiEnvelope<AppState['whitelist']>>('/whitelist'),
+      requestJson<ApiEnvelope<AppState['whitelistRestrictions']>>('/whitelist/restrictions'),
       requestJson<ApiEnvelope<AppState['bans']>>('/bans'),
     ]);
 
     return {
       communities: unwrap(communitiesPayload),
       whitelist: unwrap(whitelistPayload),
+      whitelistRestrictions: unwrap(whitelistRestrictionsPayload),
       bans: unwrap(bansPayload),
     };
   },
@@ -222,6 +225,28 @@ export const httpApi: KzGuardApi = {
   },
   async deleteWhitelistPlayer(playerId) {
     await requestJson<{ message: string }>(`/whitelist/${playerId}`, {
+      method: 'DELETE',
+    });
+  },
+  async listWhitelistRestrictions(): Promise<WhitelistRestriction[]> {
+    const payload = await requestJson<ApiEnvelope<WhitelistRestriction[]>>('/whitelist/restrictions');
+    return unwrap(payload);
+  },
+  async addWhitelistRestriction(playerId: string): Promise<WhitelistRestriction> {
+    const payload = await requestJson<ApiEnvelope<WhitelistRestriction>>(`/whitelist/${playerId}/restriction`, {
+      method: 'POST',
+    });
+    return unwrap(payload);
+  },
+  async updateWhitelistRestriction(playerId: string, serverIds: string[]): Promise<WhitelistRestriction> {
+    const payload = await requestJson<ApiEnvelope<WhitelistRestriction>>(`/whitelist/${playerId}/restriction`, {
+      method: 'PATCH',
+      body: JSON.stringify({ serverIds }),
+    });
+    return unwrap(payload);
+  },
+  async deleteWhitelistRestriction(playerId: string) {
+    await requestJson<{ message: string }>(`/whitelist/${playerId}/restriction`, {
       method: 'DELETE',
     });
   },

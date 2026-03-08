@@ -6,5 +6,6 @@ pub(crate) mod mappers;
 pub(crate) mod operation_logs;
 pub(crate) mod server_presence;
 pub(crate) mod whitelist;
+pub(crate) mod whitelist_restrictions;
 
 pub(crate) mod server_access;

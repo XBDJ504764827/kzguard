@@ -291,6 +291,21 @@ body {
   border-radius: var(--kz-radius-md);
 }
 
+.arco-btn.arco-btn-shape-square {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.arco-btn.arco-btn-shape-square > span,
+.arco-btn.arco-btn-shape-square .arco-btn-content,
+.arco-btn.arco-btn-shape-square .arco-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
 .arco-tabs-header-nav {
   padding: 4px;
   border-radius: var(--kz-radius-md);

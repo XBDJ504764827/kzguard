@@ -21,6 +21,7 @@ import type {
   WebsiteAdminCreateDraft,
   WebsiteAdminUpdateDraft,
   WhitelistPlayer,
+  WhitelistRestriction,
   WhitelistPlayerUpdateDraft,
 } from '../types';
 
@@ -64,6 +65,10 @@ export interface KzGuardApi {
   createManualWhitelistEntry: (draft: ManualWhitelistDraft) => Promise<WhitelistPlayer>;
   updateWhitelistPlayer: (playerId: string, draft: WhitelistPlayerUpdateDraft) => Promise<WhitelistPlayer>;
   deleteWhitelistPlayer: (playerId: string) => Promise<void>;
+  listWhitelistRestrictions: () => Promise<WhitelistRestriction[]>;
+  addWhitelistRestriction: (playerId: string) => Promise<WhitelistRestriction>;
+  updateWhitelistRestriction: (playerId: string, serverIds: string[]) => Promise<WhitelistRestriction>;
+  deleteWhitelistRestriction: (playerId: string) => Promise<void>;
   updateWhitelistStatus: (playerId: string, status: 'approved' | 'rejected', note?: string) => Promise<void>;
   getUsersSummary: () => Promise<UserSummary>;
 }
