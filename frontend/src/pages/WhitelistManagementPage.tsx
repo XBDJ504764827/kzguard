@@ -15,8 +15,9 @@ import {
 import { IconPlus } from '@arco-design/web-react/icon';
 import { useMemo, useState } from 'react';
 import { useAppStore } from '../contexts/AppStoreContext';
-import type { ApplicationDraft, ManualWhitelistDraft, WhitelistPlayer, WhitelistStatus } from '../types';
+import type { ManualWhitelistDraft, WhitelistPlayer, WhitelistPlayerUpdateDraft, WhitelistStatus } from '../types';
 import { getErrorMessage } from '../utils/error';
+import { websiteAdminRoleColorMap, websiteAdminRoleLabelMap } from '../utils/websiteAdmin';
 
 const TabPane = Tabs.TabPane;
 const Option = Select.Option;
@@ -29,11 +30,18 @@ const createEmptyManualDraft = (): ManualWhitelistDraft => ({
   status: 'approved',
 });
 
-const createEmptyApplicationDraft = (): ApplicationDraft => ({
+const createEmptyUpdateDraft = (): WhitelistPlayerUpdateDraft => ({
   nickname: '',
   steamId: '',
   contact: '',
   note: '',
+});
+
+const createUpdateDraftFromPlayer = (player: WhitelistPlayer): WhitelistPlayerUpdateDraft => ({
+  nickname: player.nickname,
+  steamId: player.steamId64 || player.steamId || player.steamId3,
+  contact: player.contact ?? '',
+  note: player.note ?? '',
 });
 
 const formatTime = (value?: string) => {
@@ -62,6 +70,11 @@ const statusColorMap: Record<WhitelistStatus, 'green' | 'orange' | 'red'> = {
   rejected: 'red',
 };
 
+const sourceTextMap: Record<WhitelistPlayer['source'], string> = {
+  manual: '管理员手动添加',
+  application: '玩家申请',
+};
+
 const validatePlayerDraft = (nickname: string, steamId: string) => {
   if (!nickname.trim()) {
     return '请输入玩家昵称';
@@ -75,14 +88,32 @@ const validatePlayerDraft = (nickname: string, steamId: string) => {
 };
 
 export const WhitelistManagementPage = () => {
-  const { state, approvePlayer, rejectPlayer, manualAddPlayer, simulateApplication, apiMode, apiError, bootstrapping } = useAppStore();
+  const {
+    state,
+    currentAdmin,
+    approvePlayer,
+    rejectPlayer,
+    manualAddPlayer,
+    updateWhitelistPlayer,
+    deleteWhitelistPlayer,
+    apiMode,
+    apiError,
+    bootstrapping,
+  } = useAppStore();
   const [activeTab, setActiveTab] = useState<WhitelistStatus>('pending');
   const [manualModalVisible, setManualModalVisible] = useState(false);
-  const [applicationModalVisible, setApplicationModalVisible] = useState(false);
   const [manualDraft, setManualDraft] = useState<ManualWhitelistDraft>(createEmptyManualDraft);
-  const [applicationDraft, setApplicationDraft] = useState<ApplicationDraft>(createEmptyApplicationDraft);
+  const [editTargetId, setEditTargetId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<WhitelistPlayerUpdateDraft>(createEmptyUpdateDraft);
+  const [rejectTargetId, setRejectTargetId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [submittingManual, setSubmittingManual] = useState(false);
-  const [submittingApplication, setSubmittingApplication] = useState(false);
+  const [submittingEdit, setSubmittingEdit] = useState(false);
+  const [submittingReject, setSubmittingReject] = useState(false);
+  const [submittingDelete, setSubmittingDelete] = useState(false);
+
+  const isSystemAdmin = currentAdmin?.role === 'system_admin';
 
   const groupedPlayers = useMemo(
     () => ({
@@ -93,13 +124,28 @@ export const WhitelistManagementPage = () => {
     [state.whitelist],
   );
 
+  const editingPlayer = useMemo(
+    () => state.whitelist.find((player) => player.id === editTargetId) ?? null,
+    [editTargetId, state.whitelist],
+  );
+  const rejectingPlayer = useMemo(
+    () => state.whitelist.find((player) => player.id === rejectTargetId) ?? null,
+    [rejectTargetId, state.whitelist],
+  );
+  const deletingPlayer = useMemo(
+    () => state.whitelist.find((player) => player.id === deleteTargetId) ?? null,
+    [deleteTargetId, state.whitelist],
+  );
+
   const columns = [
     {
       title: '玩家信息',
       dataIndex: 'nickname',
+      width: 320,
       render: (_value: string, record: WhitelistPlayer) => (
         <Space direction="vertical" size="mini">
           <Typography.Text style={{ fontWeight: 600 }}>{record.nickname}</Typography.Text>
+          <Typography.Text type="secondary">联系方式：{record.contact || '-'}</Typography.Text>
           <Typography.Text type="secondary">SteamID64：{record.steamId64 || '-'}</Typography.Text>
           <Typography.Text type="secondary">SteamID：{record.steamId}</Typography.Text>
           <Typography.Text type="secondary">SteamID3：{record.steamId3 || '-'}</Typography.Text>
@@ -109,16 +155,19 @@ export const WhitelistManagementPage = () => {
     {
       title: '来源',
       dataIndex: 'source',
-      render: (value: WhitelistPlayer['source']) => <Tag>{value === 'manual' ? '管理员手动添加' : '玩家申请'}</Tag>,
+      width: 150,
+      render: (value: WhitelistPlayer['source']) => <Tag>{sourceTextMap[value]}</Tag>,
     },
     {
-      title: '备注',
+      title: '备注 / 缘由',
       dataIndex: 'note',
+      width: 240,
       render: (value?: string) => value || '-',
     },
     {
       title: '时间',
       dataIndex: 'appliedAt',
+      width: 220,
       render: (_value: string, record: WhitelistPlayer) => (
         <Space direction="vertical" size="mini">
           <Typography.Text>申请：{formatTime(record.appliedAt)}</Typography.Text>
@@ -129,47 +178,70 @@ export const WhitelistManagementPage = () => {
     {
       title: '状态',
       dataIndex: 'status',
+      width: 120,
       render: (value: WhitelistStatus) => <Tag color={statusColorMap[value]}>{statusTextMap[value]}</Tag>,
     },
     {
       title: '操作',
       dataIndex: 'id',
-      width: 220,
+      width: 320,
       render: (_value: string, record: WhitelistPlayer) => {
-        if (record.status !== 'pending') {
-          return <Typography.Text type="secondary">已完成处理</Typography.Text>;
+        const canReview = record.status === 'pending' && record.source === 'application';
+
+        if (!canReview && !isSystemAdmin) {
+          return <Typography.Text type="secondary">仅系统管理员可编辑或删除记录</Typography.Text>;
         }
 
         return (
-          <Space>
-            <Button
-              type="primary"
-              size="small"
-              onClick={async () => {
-                try {
-                  await approvePlayer(record.id);
-                  Message.success(`已通过 ${record.nickname} 的白名单申请`);
-                } catch (error) {
-                  Message.error(getErrorMessage(error, '审核通过失败'));
-                }
-              }}
-            >
-              通过
-            </Button>
-            <Button
-              size="small"
-              status="danger"
-              onClick={async () => {
-                try {
-                  await rejectPlayer(record.id, '管理员审核未通过');
-                  Message.success(`已拒绝 ${record.nickname} 的白名单申请`);
-                } catch (error) {
-                  Message.error(getErrorMessage(error, '审核拒绝失败'));
-                }
-              }}
-            >
-              拒绝
-            </Button>
+          <Space wrap size="mini">
+            {canReview ? (
+              <Button
+                type="primary"
+                size="small"
+                onClick={async () => {
+                  try {
+                    await approvePlayer(record.id);
+                    Message.success(`已通过 ${record.nickname} 的白名单申请`);
+                  } catch (error) {
+                    Message.error(getErrorMessage(error, '审核通过失败'));
+                  }
+                }}
+              >
+                通过
+              </Button>
+            ) : null}
+            {canReview ? (
+              <Button
+                size="small"
+                status="danger"
+                onClick={() => {
+                  setRejectTargetId(record.id);
+                  setRejectReason(record.note ?? '');
+                }}
+              >
+                不通过
+              </Button>
+            ) : null}
+            {isSystemAdmin ? (
+              <Button
+                size="small"
+                onClick={() => {
+                  setEditTargetId(record.id);
+                  setEditDraft(createUpdateDraftFromPlayer(record));
+                }}
+              >
+                编辑
+              </Button>
+            ) : null}
+            {isSystemAdmin ? (
+              <Button
+                size="small"
+                status="danger"
+                onClick={() => setDeleteTargetId(record.id)}
+              >
+                删除
+              </Button>
+            ) : null}
           </Space>
         );
       },
@@ -191,7 +263,7 @@ export const WhitelistManagementPage = () => {
       setManualModalVisible(false);
       setManualDraft(createEmptyManualDraft());
       setActiveTab(manualDraft.status);
-      Message.success('玩家已由管理员手动加入白名单列表');
+      Message.success('玩家已由系统管理员手动加入白名单列表');
     } catch (error) {
       Message.error(getErrorMessage(error, '手动添加失败'));
     } finally {
@@ -199,26 +271,72 @@ export const WhitelistManagementPage = () => {
     }
   };
 
-  const handleSimulateApplication = async () => {
-    const errorMessage = validatePlayerDraft(applicationDraft.nickname, applicationDraft.steamId);
+  const handleEditPlayer = async () => {
+    if (!editTargetId) {
+      return;
+    }
+
+    const errorMessage = validatePlayerDraft(editDraft.nickname, editDraft.steamId);
 
     if (errorMessage) {
       Message.warning(errorMessage);
       return;
     }
 
-    setSubmittingApplication(true);
+    setSubmittingEdit(true);
 
     try {
-      await simulateApplication(applicationDraft);
-      setApplicationModalVisible(false);
-      setApplicationDraft(createEmptyApplicationDraft());
-      setActiveTab('pending');
-      Message.success('已生成一条新的玩家申请，管理员可前往待审核处理');
+      await updateWhitelistPlayer(editTargetId, editDraft);
+      setEditTargetId(null);
+      setEditDraft(createEmptyUpdateDraft());
+      Message.success('白名单玩家信息已更新');
     } catch (error) {
-      Message.error(getErrorMessage(error, '提交申请失败'));
+      Message.error(getErrorMessage(error, '更新玩家信息失败'));
     } finally {
-      setSubmittingApplication(false);
+      setSubmittingEdit(false);
+    }
+  };
+
+  const handleRejectPlayer = async () => {
+    if (!rejectTargetId) {
+      return;
+    }
+
+    if (!rejectReason.trim()) {
+      Message.warning('请填写不通过缘由');
+      return;
+    }
+
+    setSubmittingReject(true);
+
+    try {
+      await rejectPlayer(rejectTargetId, rejectReason);
+      Message.success(`已拒绝 ${rejectingPlayer?.nickname ?? '该玩家'} 的白名单申请`);
+      setRejectTargetId(null);
+      setRejectReason('');
+      setActiveTab('rejected');
+    } catch (error) {
+      Message.error(getErrorMessage(error, '审核拒绝失败'));
+    } finally {
+      setSubmittingReject(false);
+    }
+  };
+
+  const handleDeletePlayer = async () => {
+    if (!deleteTargetId) {
+      return;
+    }
+
+    setSubmittingDelete(true);
+
+    try {
+      await deleteWhitelistPlayer(deleteTargetId);
+      Message.success('白名单记录已删除');
+      setDeleteTargetId(null);
+    } catch (error) {
+      Message.error(getErrorMessage(error, '删除白名单记录失败'));
+    } finally {
+      setSubmittingDelete(false);
     }
   };
 
@@ -232,18 +350,24 @@ export const WhitelistManagementPage = () => {
                 白名单管理
               </Typography.Title>
               <Typography.Paragraph className="page-toolbar-description" type="secondary">
-                审核通过的玩家才允许进入服务器；待审核与已拒绝玩家会保留完整记录，方便管理员追踪。
+                系统管理员可维护白名单玩家资料；普通管理员仅可审核玩家主动提交的申请，并且拒绝时必须填写缘由。
               </Typography.Paragraph>
             </div>
 
             <div className="page-toolbar-actions">
+              {currentAdmin ? (
+                <Tag color={websiteAdminRoleColorMap[currentAdmin.role]}>
+                  当前角色：{websiteAdminRoleLabelMap[currentAdmin.role]}
+                </Tag>
+              ) : null}
               <Tag color="green">已通过 {groupedPlayers.approved.length}</Tag>
               <Tag color="orange">待审核 {groupedPlayers.pending.length}</Tag>
               <Tag color="red">已拒绝 {groupedPlayers.rejected.length}</Tag>
-              <Button onClick={() => setApplicationModalVisible(true)}>模拟玩家申请</Button>
-              <Button type="primary" icon={<IconPlus />} onClick={() => setManualModalVisible(true)}>
-                管理员手动添加
-              </Button>
+              {isSystemAdmin ? (
+                <Button type="primary" icon={<IconPlus />} onClick={() => setManualModalVisible(true)}>
+                  管理员手动添加
+                </Button>
+              ) : null}
             </div>
           </div>
 
@@ -253,6 +377,16 @@ export const WhitelistManagementPage = () => {
             content={`当前白名单流程接口模式：${apiMode === 'http' ? 'HTTP API' : 'Mock API'}${bootstrapping ? '，正在加载…' : ''}`}
           />
 
+          <Alert
+            type={isSystemAdmin ? 'info' : 'warning'}
+            showIcon
+            content={
+              isSystemAdmin
+                ? '系统管理员可手动录入、编辑、删除白名单记录，并可继续审核玩家申请。'
+                : '普通管理员仅可审核玩家主动提交的白名单申请，不能手动添加、编辑或删除记录；驳回时必须填写缘由。'
+            }
+          />
+
           {apiError ? <Alert type="warning" showIcon content={`接口提示：${apiError}`} /> : null}
         </Space>
       </Card>
@@ -260,19 +394,19 @@ export const WhitelistManagementPage = () => {
       <Card className="table-card">
         <Tabs activeTab={activeTab} onChange={(value) => setActiveTab(value as WhitelistStatus)}>
           <TabPane key="approved" title={`已通过 (${groupedPlayers.approved.length})`}>
-            <Table rowKey="id" columns={columns} data={groupedPlayers.approved} pagination={false} />
+            <Table rowKey="id" columns={columns} data={groupedPlayers.approved} pagination={false} scroll={{ x: 1300 }} />
           </TabPane>
           <TabPane key="pending" title={`待审核 (${groupedPlayers.pending.length})`}>
-            <Table rowKey="id" columns={columns} data={groupedPlayers.pending} pagination={false} />
+            <Table rowKey="id" columns={columns} data={groupedPlayers.pending} pagination={false} scroll={{ x: 1300 }} />
           </TabPane>
           <TabPane key="rejected" title={`已拒绝 (${groupedPlayers.rejected.length})`}>
-            <Table rowKey="id" columns={columns} data={groupedPlayers.rejected} pagination={false} />
+            <Table rowKey="id" columns={columns} data={groupedPlayers.rejected} pagination={false} scroll={{ x: 1300 }} />
           </TabPane>
         </Tabs>
       </Card>
 
       <Modal
-        title="管理员手动添加玩家"
+        title="系统管理员手动添加玩家"
         visible={manualModalVisible}
         confirmLoading={submittingManual}
         onOk={() => {
@@ -316,6 +450,7 @@ export const WhitelistManagementPage = () => {
 
           <Typography.Text>备注</Typography.Text>
           <Input.TextArea
+            autoSize={{ minRows: 3, maxRows: 5 }}
             maxLength={100}
             value={manualDraft.note}
             onChange={(value) => setManualDraft((draft) => ({ ...draft, note: value }))}
@@ -325,50 +460,82 @@ export const WhitelistManagementPage = () => {
       </Modal>
 
       <Modal
-        title="模拟玩家提交白名单申请"
-        visible={applicationModalVisible}
-        confirmLoading={submittingApplication}
+        title={editingPlayer ? `编辑白名单玩家 · ${editingPlayer.nickname}` : '编辑白名单玩家'}
+        visible={Boolean(editingPlayer)}
+        confirmLoading={submittingEdit}
         onOk={() => {
-          void handleSimulateApplication();
+          void handleEditPlayer();
         }}
         onCancel={() => {
-          setApplicationModalVisible(false);
-          setApplicationDraft(createEmptyApplicationDraft());
+          setEditTargetId(null);
+          setEditDraft(createEmptyUpdateDraft());
         }}
       >
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
           <Typography.Text>玩家昵称</Typography.Text>
-          <Input
-            allowClear
-            value={applicationDraft.nickname}
-            onChange={(value) => setApplicationDraft((draft) => ({ ...draft, nickname: value }))}
-            placeholder="例如：NewChallenger"
-          />
+          <Input allowClear value={editDraft.nickname} onChange={(value) => setEditDraft((draft) => ({ ...draft, nickname: value }))} />
 
           <Typography.Text>Steam 标识</Typography.Text>
           <Input
             allowClear
-            value={applicationDraft.steamId}
-            onChange={(value) => setApplicationDraft((draft) => ({ ...draft, steamId: value }))}
-            placeholder="例如：76561197962263483 / STEAM_1:1:998877 / [U:1:1997755]"
+            value={editDraft.steamId}
+            onChange={(value) => setEditDraft((draft) => ({ ...draft, steamId: value }))}
+            placeholder="优先填写 SteamID64"
           />
 
           <Typography.Text>联系方式</Typography.Text>
-          <Input
-            allowClear
-            value={applicationDraft.contact}
-            onChange={(value) => setApplicationDraft((draft) => ({ ...draft, contact: value }))}
-            placeholder="例如：qq / discord"
-          />
+          <Input allowClear value={editDraft.contact} onChange={(value) => setEditDraft((draft) => ({ ...draft, contact: value }))} />
 
-          <Typography.Text>申请备注</Typography.Text>
+          <Typography.Text>备注</Typography.Text>
           <Input.TextArea
+            autoSize={{ minRows: 3, maxRows: 5 }}
             maxLength={100}
-            value={applicationDraft.note}
-            onChange={(value) => setApplicationDraft((draft) => ({ ...draft, note: value }))}
-            placeholder="介绍用途、社区身份或申请原因"
+            value={editDraft.note}
+            onChange={(value) => setEditDraft((draft) => ({ ...draft, note: value }))}
+            placeholder="可填写补充说明或保留空白"
           />
         </Space>
+      </Modal>
+
+      <Modal
+        title={rejectingPlayer ? `驳回白名单申请 · ${rejectingPlayer.nickname}` : '驳回白名单申请'}
+        visible={Boolean(rejectingPlayer)}
+        confirmLoading={submittingReject}
+        okButtonProps={{ status: 'danger' }}
+        onOk={() => {
+          void handleRejectPlayer();
+        }}
+        onCancel={() => {
+          setRejectTargetId(null);
+          setRejectReason('');
+        }}
+      >
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Alert type="warning" showIcon content="驳回申请时必须填写明确缘由，玩家会依据该说明调整后重新申请。" />
+          <Typography.Text>不通过缘由</Typography.Text>
+          <Input.TextArea
+            autoSize={{ minRows: 4, maxRows: 6 }}
+            maxLength={200}
+            value={rejectReason}
+            onChange={setRejectReason}
+            placeholder="例如：当前未提供社区身份信息，请补充 QQ 群名片或赛图记录后重新申请"
+          />
+        </Space>
+      </Modal>
+
+      <Modal
+        title="删除白名单记录"
+        visible={Boolean(deletingPlayer)}
+        confirmLoading={submittingDelete}
+        okButtonProps={{ status: 'danger' }}
+        onOk={() => {
+          void handleDeletePlayer();
+        }}
+        onCancel={() => setDeleteTargetId(null)}
+      >
+        <Typography.Text>
+          确认删除 {deletingPlayer?.nickname ?? '该玩家'} 的白名单记录吗？删除后将无法恢复，并会立即同步更新服务器准入缓存。
+        </Typography.Text>
       </Modal>
     </Space>
   );

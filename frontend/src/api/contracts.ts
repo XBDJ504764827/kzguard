@@ -1,7 +1,6 @@
 import type {
   ApiMode,
   AppState,
-  ApplicationDraft,
   AuthSession,
   BanRecord,
   BanRecordOperator,
@@ -22,6 +21,7 @@ import type {
   WebsiteAdminCreateDraft,
   WebsiteAdminUpdateDraft,
   WhitelistPlayer,
+  WhitelistPlayerUpdateDraft,
 } from '../types';
 
 export interface ApiEnvelope<T> {
@@ -60,8 +60,9 @@ export interface KzGuardApi {
   updateBanRecord: (banId: string, draft: BanRecordUpdateDraft, operator: BanRecordOperator) => Promise<BanRecord>;
   revokeBanRecord: (banId: string, operator: BanRecordOperator) => Promise<BanRecord>;
   deleteBanRecord: (banId: string, operator: BanRecordOperator) => Promise<void>;
-  createApplication: (draft: ApplicationDraft) => Promise<WhitelistPlayer>;
   createManualWhitelistEntry: (draft: ManualWhitelistDraft) => Promise<WhitelistPlayer>;
+  updateWhitelistPlayer: (playerId: string, draft: WhitelistPlayerUpdateDraft) => Promise<WhitelistPlayer>;
+  deleteWhitelistPlayer: (playerId: string) => Promise<void>;
   updateWhitelistStatus: (playerId: string, status: 'approved' | 'rejected', note?: string) => Promise<void>;
   getUsersSummary: () => Promise<UserSummary>;
 }

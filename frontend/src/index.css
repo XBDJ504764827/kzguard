@@ -182,7 +182,10 @@ body {
 }
 
 .content-shell {
-  padding: 24px;
+  width: 100%;
+  max-width: 1720px;
+  margin: 0 auto;
+  padding: clamp(16px, 2vw, 24px);
 }
 
 .metric-card,
@@ -300,6 +303,13 @@ body {
 
 .arco-table-container {
   border: 1px solid var(--kz-border);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.arco-modal {
+  width: min(680px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
 }
 
 .arco-table .arco-table-tr > .arco-table-th,
@@ -915,7 +925,10 @@ body {
 }
 
 .public-hero {
-  padding: 24px 24px 0;
+  width: 100%;
+  max-width: 1720px;
+  margin: 0 auto;
+  padding: clamp(16px, 2vw, 24px) clamp(16px, 2vw, 24px) 0;
 }
 
 .public-hero-card {
@@ -931,6 +944,46 @@ body {
   min-width: 0;
 }
 
+
+@media (max-width: 1200px) {
+  .app-header,
+  .public-header {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .page-toolbar,
+  .app-header,
+  .public-header,
+  .app-header-actions,
+  .public-header-actions {
+    align-items: flex-start;
+  }
+
+  .page-toolbar-copy,
+  .page-toolbar-actions,
+  .toolbar-action-group,
+  .toolbar-search-group,
+  .card-extra-actions {
+    width: 100%;
+  }
+
+  .page-toolbar-actions,
+  .toolbar-action-group,
+  .card-extra-actions {
+    justify-content: flex-start;
+  }
+
+  .page-header-card .arco-card-body,
+  .section-card .arco-card-body,
+  .table-card .arco-card-body {
+    padding: 18px 20px;
+  }
+
+  .arco-card-head {
+    padding: 0 20px;
+  }
+}
 
 @media (max-width: 768px) {
   .content-shell,
@@ -968,6 +1021,37 @@ body {
   .app-header,
   .public-header {
     padding: 14px 16px;
+  }
+
+  .page-header-card .arco-card-body,
+  .section-card .arco-card-body,
+  .table-card .arco-card-body {
+    padding: 16px;
+  }
+
+  .arco-card-head {
+    padding: 0 16px;
+  }
+
+  .page-toolbar-actions .arco-btn,
+  .toolbar-action-group .arco-btn,
+  .card-extra-actions .arco-btn,
+  .page-toolbar-actions .arco-select,
+  .toolbar-action-group .arco-select,
+  .card-extra-actions .arco-select,
+  .toolbar-search-input,
+  .public-toolbar-search-input {
+    width: 100% !important;
+  }
+
+  .arco-modal {
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+  }
+
+  .arco-table .arco-table-tr > .arco-table-th,
+  .arco-table .arco-table-tr > .arco-table-td {
+    padding: 12px 10px;
   }
 
   .public-nav-strip,

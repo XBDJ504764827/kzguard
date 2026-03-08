@@ -182,7 +182,7 @@ export interface ManualWhitelistDraft {
   status: 'approved' | 'rejected';
 }
 
-export interface ApplicationDraft {
+export interface WhitelistPlayerUpdateDraft {
   nickname: string;
   steamId: string;
   contact?: string;
@@ -255,6 +255,8 @@ export type OperationLogAction =
   | 'whitelist_approved'
   | 'whitelist_rejected'
   | 'whitelist_manual_added'
+  | 'whitelist_player_updated'
+  | 'whitelist_player_deleted'
   | 'whitelist_application_simulated'
   | 'admin_created'
   | 'admin_profile_updated';

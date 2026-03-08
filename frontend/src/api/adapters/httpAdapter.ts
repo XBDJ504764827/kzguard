@@ -1,6 +1,5 @@
 import type {
   AppState,
-  ApplicationDraft,
   AuthSession,
   BanRecord,
   BanRecordOperator,
@@ -9,6 +8,7 @@ import type {
   LoginDraft,
   ManualBanDraft,
   ManualWhitelistDraft,
+  WhitelistPlayerUpdateDraft,
   OperationLog,
   ServerDraft,
   ServerPlayersSnapshot,
@@ -199,14 +199,6 @@ export const httpApi: KzGuardApi = {
       body: JSON.stringify({ operator }),
     });
   },
-  async createApplication(draft: ApplicationDraft) {
-    const payload = await requestJson<ApiEnvelope<AppState['whitelist'][number]>>('/whitelist/applications', {
-      method: 'POST',
-      body: JSON.stringify(draft),
-    });
-
-    return unwrap(payload);
-  },
   async createManualWhitelistEntry(draft: ManualWhitelistDraft) {
     const payload = await requestJson<ApiEnvelope<AppState['whitelist'][number]>>('/whitelist/manual', {
       method: 'POST',
@@ -214,6 +206,19 @@ export const httpApi: KzGuardApi = {
     });
 
     return unwrap(payload);
+  },
+  async updateWhitelistPlayer(playerId, draft: WhitelistPlayerUpdateDraft) {
+    const payload = await requestJson<ApiEnvelope<AppState['whitelist'][number]>>(`/whitelist/${playerId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(draft),
+    });
+
+    return unwrap(payload);
+  },
+  async deleteWhitelistPlayer(playerId) {
+    await requestJson<{ message: string }>(`/whitelist/${playerId}`, {
+      method: 'DELETE',
+    });
   },
   async updateWhitelistStatus(playerId, status, note) {
     await requestJson<{ message: string }>(`/whitelist/${playerId}/status`, {

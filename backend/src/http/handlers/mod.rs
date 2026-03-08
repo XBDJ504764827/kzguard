@@ -33,8 +33,8 @@ pub(crate) use server_bans::{create_server_ban_record_handler, revoke_server_ban
 pub(crate) use server_presence::report_server_presence_handler;
 pub(crate) use users::user_summary_handler;
 pub(crate) use whitelist::{
-    create_whitelist_application_handler, create_whitelist_manual_handler, list_whitelist_handler,
-    update_whitelist_status_handler,
+    create_whitelist_manual_handler, delete_whitelist_player_handler, list_whitelist_handler,
+    update_whitelist_player_handler, update_whitelist_status_handler,
 };
 
 pub(crate) use server_access::{check_server_access_handler, sync_server_access_handler};

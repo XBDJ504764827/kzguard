@@ -12,8 +12,8 @@ use crate::{
     http::{
         common::{ApiEnvelope, MessageResponse},
         requests::{
-            ApplicationDraft, ManualWhitelistDraft, ReviewWhitelistBody, WhitelistPlayerPath,
-            WhitelistQuery,
+            ManualWhitelistDraft, ReviewWhitelistBody, WhitelistPlayerPath,
+            WhitelistPlayerUpdateDraft, WhitelistQuery,
         },
     },
     state::SharedState,
@@ -30,17 +30,6 @@ pub(crate) async fn list_whitelist_handler(
 
     let whitelist = whitelist::list_whitelist(&state.pool, query.status).await?;
     Ok(Json(ApiEnvelope::new(whitelist)))
-}
-
-pub(crate) async fn create_whitelist_application_handler(
-    State(state): State<SharedState>,
-    Json(draft): Json<ApplicationDraft>,
-) -> AppResult<impl IntoResponse> {
-    let player = whitelist::create_application(&state.pool, draft).await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(ApiEnvelope::with_message(player, "白名单申请已提交")),
-    ))
 }
 
 pub(crate) async fn create_whitelist_manual_handler(
@@ -64,6 +53,55 @@ pub(crate) async fn create_whitelist_manual_handler(
         StatusCode::CREATED,
         Json(ApiEnvelope::with_message(player, "玩家已手动录入")),
     ))
+}
+
+pub(crate) async fn update_whitelist_player_handler(
+    State(state): State<SharedState>,
+    Path(path): Path<WhitelistPlayerPath>,
+    headers: HeaderMap,
+    Json(draft): Json<WhitelistPlayerUpdateDraft>,
+) -> AppResult<Json<ApiEnvelope<WhitelistPlayer>>> {
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
+    let player = whitelist::update_whitelist_player(
+        &state.pool,
+        &path.player_id,
+        draft,
+        Some(current_admin.id),
+    )
+    .await?;
+    server_access::refresh_all_server_access_snapshots(
+        &state.pool,
+        &state.redis,
+        &state.http_client,
+        &state.access_control,
+    )
+    .await?;
+
+    Ok(Json(ApiEnvelope::with_message(player, "白名单玩家信息已更新")))
+}
+
+pub(crate) async fn delete_whitelist_player_handler(
+    State(state): State<SharedState>,
+    Path(path): Path<WhitelistPlayerPath>,
+    headers: HeaderMap,
+) -> AppResult<Json<MessageResponse>> {
+    let token = bearer_token_from_headers(&headers);
+    let current_admin = auth::require_authenticated_admin(&state.pool, token.as_deref()).await?;
+
+    whitelist::delete_whitelist_player(&state.pool, &path.player_id, Some(current_admin.id)).await?;
+    server_access::refresh_all_server_access_snapshots(
+        &state.pool,
+        &state.redis,
+        &state.http_client,
+        &state.access_control,
+    )
+    .await?;
+
+    Ok(Json(MessageResponse {
+        message: "白名单记录已删除".to_string(),
+    }))
 }
 
 pub(crate) async fn update_whitelist_status_handler(

@@ -17,6 +17,8 @@ export const operationLogActionLabelMap: Record<OperationLogAction, string> = {
   whitelist_approved: '通过白名单',
   whitelist_rejected: '拒绝白名单',
   whitelist_manual_added: '手动录入白名单',
+  whitelist_player_updated: '编辑白名单玩家',
+  whitelist_player_deleted: '删除白名单玩家',
   whitelist_application_simulated: '模拟玩家申请',
   admin_created: '新增管理员',
   admin_profile_updated: '修改管理员资料',

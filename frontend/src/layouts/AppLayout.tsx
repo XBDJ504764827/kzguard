@@ -11,8 +11,8 @@ import {
   IconPoweroff,
   IconUser,
 } from '@arco-design/web-react/icon';
+import { useEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useMemo, useState } from 'react';
 import { useAppStore } from '../contexts/AppStoreContext';
 import { websiteAdminRoleColorMap, websiteAdminRoleLabelMap } from '../utils/websiteAdmin';
 
@@ -25,11 +25,50 @@ const menuEntries = [
   { key: '/operation-logs', label: '操作日志', icon: <IconDriveFile /> },
 ];
 
+const getInitialCollapsed = () => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return window.matchMedia('(max-width: 1200px)').matches;
+};
+
 export const AppLayout = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { theme, setTheme, apiMode, currentAdmin, logout } = useAppStore();
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(getInitialCollapsed);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const media = window.matchMedia('(max-width: 1200px)');
+    const syncCompactLayout = (matches: boolean) => {
+      if (matches) {
+        setCollapsed(true);
+      }
+    };
+
+    syncCompactLayout(media.matches);
+
+    const handleChange = (event: MediaQueryListEvent) => {
+      syncCompactLayout(event.matches);
+    };
+
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', handleChange);
+      return () => media.removeEventListener('change', handleChange);
+    }
+
+    const legacyHandleChange = (event: MediaQueryListEvent) => {
+      syncCompactLayout(event.matches);
+    };
+
+    media.addListener(legacyHandleChange);
+    return () => media.removeListener(legacyHandleChange);
+  }, []);
 
   const selectedKey = useMemo(() => {
     const currentEntry = menuEntries.find((entry) =>

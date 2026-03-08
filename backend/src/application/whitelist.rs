@@ -6,11 +6,14 @@ use crate::{
     domain::{
         db::DbWhitelistPlayer,
         models::{
-            ResolvedSteamIdentifiers, WhitelistApplicationHistory, WhitelistPlayer,
+            OperatorSnapshot, ResolvedSteamIdentifiers, WhitelistApplicationHistory,
+            WhitelistPlayer,
         },
     },
     error::{AppError, AppResult},
-    http::requests::{ApplicationDraft, ManualWhitelistDraft, PublicWhitelistApplicationDraft},
+    http::requests::{
+        ManualWhitelistDraft, PublicWhitelistApplicationDraft, WhitelistPlayerUpdateDraft,
+    },
     support::{
         convert::trim_to_none,
         ids::prefixed_id,
@@ -71,32 +74,6 @@ pub(crate) async fn get_public_whitelist_history(
     build_whitelist_application_history(pool, identifiers).await
 }
 
-pub(crate) async fn create_application(
-    pool: &MySqlPool,
-    draft: ApplicationDraft,
-) -> AppResult<WhitelistPlayer> {
-    validate_application_draft(&draft.nickname, &draft.steam_id)?;
-    let identifiers = resolve_history_identifiers(&draft.steam_id).await?;
-
-    let player = WhitelistPlayer {
-        id: prefixed_id("player"),
-        nickname: draft.nickname.trim().to_string(),
-        steam_id64: identifiers.steam_id64,
-        steam_id: identifiers.steam_id,
-        steam_id3: identifiers.steam_id3,
-        contact: trim_to_none(draft.contact),
-        note: trim_to_none(draft.note),
-        status: "pending".to_string(),
-        source: "application".to_string(),
-        applied_at: now_iso(),
-        reviewed_at: None,
-    };
-
-    insert_whitelist_player(pool, &player).await?;
-
-    Ok(player)
-}
-
 pub(crate) async fn create_public_application(
     pool: &MySqlPool,
     draft: PublicWhitelistApplicationDraft,
@@ -154,6 +131,8 @@ pub(crate) async fn create_manual_whitelist_entry(
     operator_id: Option<String>,
 ) -> AppResult<WhitelistPlayer> {
     validate_manual_whitelist_draft(&draft.nickname, &draft.steam_id, &draft.status)?;
+    let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
+    ensure_system_admin(&operator, "仅系统管理员可以手动录入白名单玩家")?;
     let identifiers = resolve_history_identifiers(&draft.steam_id).await?;
 
     let now = now_iso();
@@ -173,7 +152,6 @@ pub(crate) async fn create_manual_whitelist_entry(
 
     insert_whitelist_player(pool, &player).await?;
 
-    let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
     append_operation_log(
         pool,
         "whitelist_manual_added",
@@ -200,16 +178,29 @@ pub(crate) async fn review_whitelist_player(
     note: Option<String>,
     operator_id: Option<String>,
 ) -> AppResult<()> {
-    let existing =
-        sqlx::query_as::<_, DbWhitelistPlayer>("SELECT * FROM whitelist_players WHERE id = ?")
-            .bind(player_id)
-            .fetch_optional(pool)
-            .await?;
+    let existing = get_whitelist_player(pool, player_id).await?;
+    let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
 
-    let existing =
-        existing.ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到目标玩家"))?;
+    if operator.role != "system_admin" && existing.source != "application" {
+        return Err(AppError::http(
+            StatusCode::FORBIDDEN,
+            "普通管理员仅可审核玩家主动提交的白名单申请",
+        ));
+    }
+
     let reviewed_at = now_iso();
-    let next_note = trim_to_none(note).or(existing.note.clone());
+    let next_note = if status == "rejected" {
+        let rejected_note = trim_to_none(note);
+        if rejected_note.is_none() {
+            return Err(AppError::http(
+                StatusCode::BAD_REQUEST,
+                "拒绝白名单申请时必须填写缘由",
+            ));
+        }
+        rejected_note
+    } else {
+        trim_to_none(note).or(existing.note.clone())
+    };
 
     sqlx::query("UPDATE whitelist_players SET status = ?, note = ?, reviewed_at = ? WHERE id = ?")
         .bind(status)
@@ -219,7 +210,6 @@ pub(crate) async fn review_whitelist_player(
         .execute(pool)
         .await?;
 
-    let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
     let detail = if let Some(note) = next_note
         .clone()
         .filter(|_| note_was_provided(&next_note, &existing.note))
@@ -257,6 +247,107 @@ pub(crate) async fn review_whitelist_player(
         &operator,
     )
     .await?;
+
+    Ok(())
+}
+
+pub(crate) async fn update_whitelist_player(
+    pool: &MySqlPool,
+    player_id: &str,
+    draft: WhitelistPlayerUpdateDraft,
+    operator_id: Option<String>,
+) -> AppResult<WhitelistPlayer> {
+    validate_application_draft(&draft.nickname, &draft.steam_id)?;
+    let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
+    ensure_system_admin(&operator, "仅系统管理员可以编辑白名单玩家信息")?;
+    let existing = get_whitelist_player(pool, player_id).await?;
+    let identifiers = resolve_history_identifiers(&draft.steam_id).await?;
+
+    let updated = WhitelistPlayer {
+        id: existing.id.clone(),
+        nickname: draft.nickname.trim().to_string(),
+        steam_id64: identifiers.steam_id64,
+        steam_id: identifiers.steam_id,
+        steam_id3: identifiers.steam_id3,
+        contact: trim_to_none(draft.contact),
+        note: trim_to_none(draft.note),
+        status: existing.status.clone(),
+        source: existing.source.clone(),
+        applied_at: existing.applied_at.clone(),
+        reviewed_at: existing.reviewed_at.clone(),
+    };
+
+    sqlx::query(
+        "UPDATE whitelist_players SET nickname = ?, steam_id64 = ?, steam_id = ?, steam_id3 = ?, contact = ?, note = ? WHERE id = ?",
+    )
+    .bind(&updated.nickname)
+    .bind(&updated.steam_id64)
+    .bind(&updated.steam_id)
+    .bind(&updated.steam_id3)
+    .bind(&updated.contact)
+    .bind(&updated.note)
+    .bind(player_id)
+    .execute(pool)
+    .await?;
+
+    append_operation_log(
+        pool,
+        "whitelist_player_updated",
+        format!("编辑了白名单玩家 {} 的资料。", updated.nickname),
+        &operator,
+    )
+    .await?;
+
+    Ok(updated)
+}
+
+pub(crate) async fn delete_whitelist_player(
+    pool: &MySqlPool,
+    player_id: &str,
+    operator_id: Option<String>,
+) -> AppResult<()> {
+    let operator = get_operator_snapshot(pool, operator_id.as_deref(), true).await?;
+    ensure_system_admin(&operator, "仅系统管理员可以删除白名单记录")?;
+    let existing = get_whitelist_player(pool, player_id).await?;
+
+    sqlx::query("DELETE FROM whitelist_players WHERE id = ?")
+        .bind(player_id)
+        .execute(pool)
+        .await?;
+
+    append_operation_log(
+        pool,
+        "whitelist_player_deleted",
+        format!(
+            "删除了白名单玩家 {}（{}）。",
+            existing.nickname,
+            if existing.source == "manual" {
+                "管理员手动录入"
+            } else {
+                "玩家申请"
+            }
+        ),
+        &operator,
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn get_whitelist_player(pool: &MySqlPool, player_id: &str) -> AppResult<WhitelistPlayer> {
+    let row = sqlx::query_as::<_, DbWhitelistPlayer>("SELECT * FROM whitelist_players WHERE id = ?")
+        .bind(player_id)
+        .fetch_optional(pool)
+        .await?;
+
+    row.map(map_whitelist_player)
+        .ok_or_else(|| AppError::http(StatusCode::NOT_FOUND, "未找到目标玩家"))
+}
+
+fn ensure_system_admin(operator: &OperatorSnapshot, message: &str) -> AppResult<()> {
+    if operator.role != "system_admin" {
+        return Err(AppError::http(StatusCode::FORBIDDEN, message));
+    }
 
     Ok(())
 }

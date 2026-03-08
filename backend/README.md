@@ -8,7 +8,7 @@
 - 社区组 / 服务器管理
 - 服务器 RCON 验证
 - 在线玩家上报与玩家管理
-- 白名单申请、审核、公示
+- 白名单申请、审核、公示，系统管理员可手动录入/编辑/删除，普通管理员仅可审核申请且拒绝需填写缘由
 - 封禁管理、公示、编辑、解除封禁、删除
 - 网站后台解除封禁时，会同步调用游戏服本地 `sm_unban`
 - 网站管理员新增与登录
@@ -32,7 +32,7 @@
 
 - 服务启动预热时
 - 服务器在线玩家上报成功后
-- 白名单手动新增 / 审核状态变更后
+- 白名单手动新增 / 编辑 / 删除 / 审核状态变更后
 - 服务器设置更新后
 - 插件主动请求同步时
 - 插件实时校验单个玩家时
@@ -74,8 +74,9 @@
 - `POST /api/communities/:communityId/servers/:serverId/players/:playerId/kick`
 - `POST /api/communities/:communityId/servers/:serverId/players/:playerId/ban`
 - `GET /api/whitelist`
-- `POST /api/whitelist/applications`
 - `POST /api/whitelist/manual`
+- `PATCH /api/whitelist/:playerId`
+- `DELETE /api/whitelist/:playerId`
 - `PATCH /api/whitelist/:playerId/status`
 - `GET /api/bans`
 - `POST /api/bans/manual`

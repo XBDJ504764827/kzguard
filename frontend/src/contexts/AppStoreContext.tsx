@@ -11,7 +11,6 @@ import { clearStoredAuthToken, getStoredAuthToken, persistAuthToken } from '../a
 import type {
   ApiMode,
   AppState,
-  ApplicationDraft,
   BanRecord,
   BanRecordOperator,
   BanRecordUpdateDraft,
@@ -32,6 +31,7 @@ import type {
   WebsiteAdminCreateDraft,
   WebsiteAdminUpdateDraft,
   WhitelistPlayer,
+  WhitelistPlayerUpdateDraft,
 } from '../types';
 import { banTypeLabelMap, getBanDurationLabel } from '../utils/ban';
 import { applyTheme, getPreferredTheme, persistTheme } from '../utils/theme';
@@ -77,7 +77,8 @@ interface AppStoreContextValue {
   approvePlayer: (playerId: string, note?: string) => Promise<void>;
   rejectPlayer: (playerId: string, note?: string) => Promise<void>;
   manualAddPlayer: (draft: ManualWhitelistDraft) => Promise<WhitelistPlayer>;
-  simulateApplication: (draft: ApplicationDraft) => Promise<WhitelistPlayer>;
+  updateWhitelistPlayer: (playerId: string, draft: WhitelistPlayerUpdateDraft) => Promise<WhitelistPlayer>;
+  deleteWhitelistPlayer: (playerId: string) => Promise<void>;
 }
 
 const AppStoreContext = createContext<AppStoreContextValue | null>(null);
@@ -740,8 +741,13 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
 
   const updatePlayerStatus = async (playerId: string, status: 'approved' | 'rejected', note?: string) => {
     const player = state.whitelist.find((item) => item.id === playerId);
+    const normalizedNote = normalizeText(note);
 
-    await apiService.updateWhitelistStatus(playerId, status, note);
+    if (status === 'rejected' && !normalizedNote) {
+      throw new Error('驳回白名单申请时必须填写缘由');
+    }
+
+    await apiService.updateWhitelistStatus(playerId, status, normalizedNote);
 
     setState((currentState) => ({
       ...currentState,
@@ -753,7 +759,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
         return {
           ...whitelistPlayer,
           status,
-          note: note ?? whitelistPlayer.note,
+          note: normalizedNote ?? whitelistPlayer.note,
           reviewedAt: new Date().toISOString(),
         };
       }),
@@ -762,7 +768,7 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
 
     appendOperationLog(
       status === 'approved' ? 'whitelist_approved' : 'whitelist_rejected',
-      `${status === 'approved' ? '审核通过' : '审核拒绝'}玩家 ${player?.nickname ?? playerId} 的白名单申请。${note ? ` 备注：${note}` : ''}`,
+      `${status === 'approved' ? '审核通过' : '审核拒绝'}玩家 ${player?.nickname ?? playerId} 的白名单申请。${normalizedNote ? ` 备注：${normalizedNote}` : ''}`,
     );
   };
 
@@ -791,18 +797,50 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     return player;
   };
 
-  const simulateApplication = async (draft: ApplicationDraft) => {
-    const player = await apiService.createApplication(draft);
+  const updateWhitelistPlayer = async (playerId: string, draft: WhitelistPlayerUpdateDraft) => {
+    const currentPlayer = state.whitelist.find((item) => item.id === playerId);
+
+    if (!currentPlayer) {
+      throw new Error('未找到要编辑的白名单记录');
+    }
+
+    const updatedPlayer = await apiService.updateWhitelistPlayer(playerId, {
+      nickname: draft.nickname.trim(),
+      steamId: draft.steamId.trim(),
+      contact: normalizeText(draft.contact),
+      note: normalizeText(draft.note),
+    });
 
     setState((currentState) => ({
       ...currentState,
-      whitelist: [player, ...currentState.whitelist],
+      whitelist: currentState.whitelist.map((player) => (player.id === playerId ? updatedPlayer : player)),
     }));
     setApiError(null);
 
-    appendOperationLog('whitelist_application_simulated', `模拟提交了玩家 ${player.nickname} 的白名单申请。`);
+    appendOperationLog('whitelist_player_updated', `编辑了白名单玩家 ${updatedPlayer.nickname} 的资料。`);
 
-    return player;
+    return updatedPlayer;
+  };
+
+  const deleteWhitelistPlayer = async (playerId: string) => {
+    const currentPlayer = state.whitelist.find((item) => item.id === playerId);
+
+    if (!currentPlayer) {
+      throw new Error('未找到要删除的白名单记录');
+    }
+
+    await apiService.deleteWhitelistPlayer(playerId);
+
+    setState((currentState) => ({
+      ...currentState,
+      whitelist: currentState.whitelist.filter((player) => player.id !== playerId),
+    }));
+    setApiError(null);
+
+    appendOperationLog(
+      'whitelist_player_deleted',
+      `删除了白名单玩家 ${currentPlayer.nickname}（${currentPlayer.source === 'manual' ? '管理员手动录入' : '玩家申请'}）。`,
+    );
   };
 
   const value = useMemo<AppStoreContextValue>(
@@ -841,7 +879,8 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
       approvePlayer,
       rejectPlayer,
       manualAddPlayer,
-      simulateApplication,
+      updateWhitelistPlayer,
+      deleteWhitelistPlayer,
     }),
     [apiError, authToken, bootstrapping, currentAdmin, operationLogs, state, theme, userSummary, websiteUsers],
   );

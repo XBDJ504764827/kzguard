@@ -102,15 +102,6 @@ pub(crate) struct BanRecordUpdateDraft {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ApplicationDraft {
-    pub(crate) nickname: String,
-    pub(crate) steam_id: String,
-    pub(crate) contact: Option<String>,
-    pub(crate) note: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct PublicWhitelistApplicationDraft {
     pub(crate) nickname: Option<String>,
     pub(crate) steam_identifier: String,
@@ -126,6 +117,15 @@ pub(crate) struct ManualWhitelistDraft {
     pub(crate) contact: Option<String>,
     pub(crate) note: Option<String>,
     pub(crate) status: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WhitelistPlayerUpdateDraft {
+    pub(crate) nickname: String,
+    pub(crate) steam_id: String,
+    pub(crate) contact: Option<String>,
+    pub(crate) note: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
