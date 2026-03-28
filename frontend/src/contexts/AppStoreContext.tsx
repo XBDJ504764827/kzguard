@@ -7,6 +7,7 @@ import {
   type PropsWithChildren,
 } from 'react';
 import { apiService } from '../api';
+import { AUTH_EXPIRED_EVENT } from '../api/request';
 import { clearStoredAuthToken, getStoredAuthToken, persistAuthToken } from '../api/authStorage';
 import type {
   ApiMode,
@@ -137,12 +138,32 @@ export const AppStoreProvider = ({ children }: PropsWithChildren) => {
     persistTheme(theme);
   }, [theme]);
 
+  useEffect(() => {
+    const handleExpired = () => {
+      handleAuthExpired();
+    };
+
+    globalThis.window?.addEventListener(AUTH_EXPIRED_EVENT, handleExpired);
+
+    return () => {
+      globalThis.window?.removeEventListener(AUTH_EXPIRED_EVENT, handleExpired);
+    };
+  }, []);
+
   const clearProtectedState = () => {
     setState(emptyState);
     setUserSummary(null);
     setWebsiteUsers([]);
     setCurrentAdmin(null);
     setOperationLogs([]);
+  };
+
+  const handleAuthExpired = (message = '登录状态已失效，请重新登录') => {
+    clearStoredAuthToken();
+    setAuthToken('');
+    clearProtectedState();
+    setApiError(message);
+    setBootstrapping(false);
   };
 
   const hydrateProtectedState = async (activeAdmin: WebsiteAdmin | null) => {

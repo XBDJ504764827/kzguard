@@ -1,5 +1,7 @@
 import { apiConfig } from './config';
-import { getStoredAuthToken } from './authStorage';
+import { clearStoredAuthToken, getStoredAuthToken } from './authStorage';
+
+export const AUTH_EXPIRED_EVENT = 'kzguard:auth-expired';
 
 const createHeaders = (init?: RequestInit) => {
   const headers = new Headers(init?.headers);
@@ -30,6 +32,11 @@ export const requestJson = async <T>(path: string, init?: RequestInit): Promise<
   const payload = isJson ? ((await response.json()) as T | { message?: string }) : null;
 
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      clearStoredAuthToken();
+      globalThis.window?.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: { status: response.status, path } }));
+    }
+
     const message = hasMessage(payload) && payload.message ? payload.message : `请求失败 (${response.status})`;
     throw new Error(message);
   }

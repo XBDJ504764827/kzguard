@@ -57,7 +57,7 @@ const createEmptyUpdateDraft = (): WhitelistPlayerUpdateDraft => ({
 
 const createUpdateDraftFromPlayer = (player: WhitelistPlayer): WhitelistPlayerUpdateDraft => ({
   nickname: player.nickname,
-  steamId: player.steamId64 || player.steamId || player.steamId3,
+  steamId: player.steamId64 || player.steamId || player.steamId3 || '',
   contact: player.contact ?? '',
   note: player.note ?? '',
 });
@@ -133,6 +133,7 @@ export const WhitelistManagementPage = () => {
   const [submittingEdit, setSubmittingEdit] = useState(false);
   const [submittingReject, setSubmittingReject] = useState(false);
   const [submittingDelete, setSubmittingDelete] = useState(false);
+  const [approvingPlayerId, setApprovingPlayerId] = useState<string | null>(null);
   const [restrictionTarget, setRestrictionTarget] = useState<RestrictionModalTarget | null>(null);
   const [restrictionServerIds, setRestrictionServerIds] = useState<string[]>([]);
   const [submittingRestriction, setSubmittingRestriction] = useState(false);
@@ -365,12 +366,21 @@ export const WhitelistManagementPage = () => {
               <Button
                 type="primary"
                 size="small"
+                loading={approvingPlayerId === record.id}
+                disabled={Boolean(approvingPlayerId && approvingPlayerId !== record.id)}
                 onClick={async () => {
+                  if (approvingPlayerId) {
+                    return;
+                  }
+
+                  setApprovingPlayerId(record.id);
                   try {
                     await approvePlayer(record.id);
                     Message.success(`已通过 ${record.nickname} 的白名单申请`);
                   } catch (error) {
                     Message.error(getErrorMessage(error, '审核通过失败'));
+                  } finally {
+                    setApprovingPlayerId(null);
                   }
                 }}
               >

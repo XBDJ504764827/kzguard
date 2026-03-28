@@ -17,7 +17,7 @@ import {
   Typography,
 } from '@arco-design/web-react';
 import { IconDelete, IconEdit, IconPlus } from '@arco-design/web-react/icon';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../contexts/AppStoreContext';
 import type {
   BanType,
@@ -42,6 +42,9 @@ type PlayerActionType = 'kick' | 'ban';
 type PlayerActionTarget = ServerTarget & {
   playerId: string;
   actionType: PlayerActionType;
+  playerNickname: string;
+  playerSteamId: string;
+  playerIpAddress?: string;
 };
 
 type ServerVerificationState = ServerRconVerificationResult & {
@@ -223,6 +226,7 @@ export const CommunityManagementPage = () => {
   const [loadingPlayerDrawer, setLoadingPlayerDrawer] = useState(false);
   const [verifyingServer, setVerifyingServer] = useState(false);
   const [serverVerification, setServerVerification] = useState<ServerVerificationState | null>(null);
+  const playerDrawerRequestIdRef = useRef(0);
 
   const isSystemAdmin = currentAdmin?.role === 'system_admin';
 
@@ -311,6 +315,8 @@ export const CommunityManagementPage = () => {
   };
 
   const openPlayerDrawer = async (communityId: string, serverId: string) => {
+    const requestId = playerDrawerRequestIdRef.current + 1;
+    playerDrawerRequestIdRef.current = requestId;
     setPlayerDrawerTarget({ communityId, serverId });
     setPlayerDrawerVisible(true);
     setLoadingPlayerDrawer(true);
@@ -318,9 +324,13 @@ export const CommunityManagementPage = () => {
     try {
       await loadServerPlayers(communityId, serverId);
     } catch (error) {
-      Message.error(getErrorMessage(error, '在线玩家加载失败'));
+      if (playerDrawerRequestIdRef.current === requestId) {
+        Message.error(getErrorMessage(error, '在线玩家加载失败'));
+      }
     } finally {
-      setLoadingPlayerDrawer(false);
+      if (playerDrawerRequestIdRef.current === requestId) {
+        setLoadingPlayerDrawer(false);
+      }
     }
   };
 
@@ -329,15 +339,24 @@ export const CommunityManagementPage = () => {
       return;
     }
 
+    const requestId = playerDrawerRequestIdRef.current + 1;
+    playerDrawerRequestIdRef.current = requestId;
+    const target = playerDrawerTarget;
     setLoadingPlayerDrawer(true);
 
     try {
-      await loadServerPlayers(playerDrawerTarget.communityId, playerDrawerTarget.serverId);
-      Message.success('在线玩家已刷新');
+      await loadServerPlayers(target.communityId, target.serverId);
+      if (playerDrawerRequestIdRef.current === requestId) {
+        Message.success('在线玩家已刷新');
+      }
     } catch (error) {
-      Message.error(getErrorMessage(error, '在线玩家刷新失败'));
+      if (playerDrawerRequestIdRef.current === requestId) {
+        Message.error(getErrorMessage(error, '在线玩家刷新失败'));
+      }
     } finally {
-      setLoadingPlayerDrawer(false);
+      if (playerDrawerRequestIdRef.current === requestId) {
+        setLoadingPlayerDrawer(false);
+      }
     }
   };
 
@@ -586,15 +605,30 @@ export const CommunityManagementPage = () => {
   };
 
   const handleConfirmPlayerAction = async () => {
-    if (!playerActionTarget || !playerActionContext) {
+    if (!playerActionTarget) {
       closePlayerActionModal();
       return;
     }
 
+    const latestCommunity = state.communities.find((item) => item.id === playerActionTarget.communityId);
+    const latestServer = latestCommunity?.servers.find((item) => item.id === playerActionTarget.serverId);
+    const latestPlayer = latestServer?.onlinePlayers.find((item) => item.id === playerActionTarget.playerId);
     const reason = playerActionReason.trim();
 
     if (!reason) {
       Message.warning(playerActionTarget.actionType === 'ban' ? '请输入封禁理由' : '请输入踢出理由');
+      return;
+    }
+
+    if (!latestCommunity || !latestServer) {
+      closePlayerActionModal();
+      Message.warning('目标服务器已变更，请重新打开玩家列表后再试');
+      return;
+    }
+
+    if (!latestPlayer) {
+      closePlayerActionModal();
+      Message.warning('目标玩家已离线或列表已过期，请先刷新在线玩家列表');
       return;
     }
 
@@ -613,14 +647,14 @@ export const CommunityManagementPage = () => {
           banType,
           reason,
           durationSeconds,
-          ipAddress: playerActionContext.player.ipAddress,
+          ipAddress: latestPlayer.ipAddress || playerActionTarget.playerIpAddress || '未知 IP',
         });
         Message.success(
-          `已按${banTypeLabelMap[banType]}封禁 ${playerActionContext.player.nickname}，封禁时长：${getBanDurationLabel(durationSeconds === 0 ? undefined : durationSeconds)}`,
+          `已按${banTypeLabelMap[banType]}封禁 ${latestPlayer.nickname}，封禁时长：${getBanDurationLabel(durationSeconds === 0 ? undefined : durationSeconds)}`,
         );
       } else {
         await kickServerPlayer(playerActionTarget.communityId, playerActionTarget.serverId, playerActionTarget.playerId, reason);
-        Message.success(`已踢出 ${playerActionContext.player.nickname}`);
+        Message.success(`已踢出 ${latestPlayer.nickname}`);
       }
 
       closePlayerActionModal();
@@ -1285,6 +1319,7 @@ export const CommunityManagementPage = () => {
         width={560}
         visible={playerDrawerVisible}
         onCancel={() => {
+          playerDrawerRequestIdRef.current += 1;
           setPlayerDrawerVisible(false);
           setPlayerDrawerTarget(null);
           setLoadingPlayerDrawer(false);
@@ -1349,6 +1384,9 @@ export const CommunityManagementPage = () => {
                             serverId: playerDrawerContext.server.id,
                             playerId: player.id,
                             actionType: 'kick',
+                            playerNickname: player.nickname,
+                            playerSteamId: player.steamId,
+                            playerIpAddress: player.ipAddress,
                           })
                         }
                       >
@@ -1364,6 +1402,9 @@ export const CommunityManagementPage = () => {
                             serverId: playerDrawerContext.server.id,
                             playerId: player.id,
                             actionType: 'ban',
+                            playerNickname: player.nickname,
+                            playerSteamId: player.steamId,
+                            playerIpAddress: player.ipAddress,
                           })
                         }
                       >
@@ -1401,6 +1442,15 @@ export const CommunityManagementPage = () => {
                 </Tag>
               </Space>
               <Typography.Text type="secondary">当前在线于 {playerActionContext.community.name}</Typography.Text>
+            </Space>
+          ) : playerActionTarget ? (
+            <Space direction="vertical" size="small" style={{ width: '100%' }}>
+              <Space size="small" wrap>
+                <Tag color="arcoblue">玩家：{playerActionTarget.playerNickname}</Tag>
+                <Tag>{playerActionTarget.playerSteamId}</Tag>
+                <Tag>IP：{playerActionTarget.playerIpAddress || '未知 IP'}</Tag>
+              </Space>
+              <Typography.Text type="secondary">玩家状态已变化，提交前会再次校验是否仍在线。</Typography.Text>
             </Space>
           ) : null}
 
